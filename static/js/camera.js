@@ -11,9 +11,14 @@
   const currencyResult = document.getElementById("currencyResult");
   const qrResult = document.getElementById("qrResult");
   const batteryToggle = document.getElementById("batterySaverToggle");
+  const describeSceneBtn = document.getElementById("describeSceneBtn");
+  const sceneSummaryResult = document.getElementById("sceneSummaryResult");
+  const gestureToggle = document.getElementById("gestureToggle");
+  const gestureResult = document.getElementById("gestureResult");
 
   let cameraOn = false;
   let pollTimer = null;
+  let lastGesture = null;
 
   // The camera/mode are server-side state that outlives any single
   // page. Sync with the server on load so arriving here after starting
@@ -31,6 +36,7 @@
         startPolling();
       }
       modeButtons.forEach((b) => b.classList.toggle("active", b.dataset.mode === data.mode));
+      gestureToggle.checked = !!data.gesture_active;
     } catch (err) {
       /* server not reachable yet - leave the "camera is off" default */
     }
@@ -96,6 +102,31 @@
     window.showToast(batteryToggle.checked ? "Battery saver on." : "Battery saver off.");
   });
 
+  describeSceneBtn.addEventListener("click", async () => {
+    if (!cameraOn) {
+      window.showToast("Start the camera first.");
+      return;
+    }
+    sceneSummaryResult.classList.remove("hidden");
+    sceneSummaryResult.textContent = "Looking...";
+    const res = await fetch("/describe_scene", { method: "POST" });
+    const data = await res.json();
+    sceneSummaryResult.textContent = data.success ? `🗣️ ${data.summary}` : data.error || "Could not describe the scene.";
+  });
+
+  gestureToggle.addEventListener("change", async () => {
+    await fetch("/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ gesture_active: gestureToggle.checked }),
+    });
+    window.showToast(
+      gestureToggle.checked
+        ? "Gesture control on - try a fist, open palm, thumbs up, or peace sign."
+        : "Gesture control off."
+    );
+  });
+
   function renderDetections(snapshot) {
     fpsBadge.textContent = `${snapshot.fps.toFixed(1)} FPS`;
 
@@ -114,6 +145,12 @@
     if (snapshot.last_qr && snapshot.last_qr.length) {
       qrResult.classList.remove("hidden");
       qrResult.innerHTML = snapshot.last_qr.map((q) => `🔳 ${q.data}`).join("<br>");
+    }
+
+    if (snapshot.last_gesture && snapshot.last_gesture !== lastGesture) {
+      lastGesture = snapshot.last_gesture;
+      gestureResult.classList.remove("hidden");
+      gestureResult.textContent = `✋ Gesture recognized: ${snapshot.last_gesture.replace("_", " ")}`;
     }
   }
 

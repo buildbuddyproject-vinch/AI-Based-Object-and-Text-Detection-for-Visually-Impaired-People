@@ -19,6 +19,16 @@ def encode_jpeg(frame, quality=80):
     return buf.tobytes() if ok else None
 
 
+def is_low_light(frame, threshold=60):
+    """Return True if `frame`'s average brightness is below `threshold`
+    (0-255 grayscale scale) - a cheap heuristic proxy for "too dark for
+    reliable detection", needing no model at all. YOLO/OCR accuracy
+    both degrade in low light, so this is used to warn the user rather
+    than to silently produce unreliable results."""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    return float(gray.mean()) < threshold
+
+
 class FPSTracker:
     """Exponentially-smoothed FPS counter - call `tick()` once per
     processed frame."""

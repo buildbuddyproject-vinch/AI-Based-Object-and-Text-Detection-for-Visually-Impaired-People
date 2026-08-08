@@ -20,9 +20,14 @@
         <button class="mode-btn" data-mode="qr">QR Code</button>
       </div>
       <button id="captureCurrencyBtn" class="btn btn-secondary">💵 Detect Currency</button>
+      <button id="describeSceneBtn" class="btn btn-secondary">🗣️ Describe Scene</button>
       <label class="switch-label">
         <input type="checkbox" id="batterySaverToggle">
         🔋 Battery Saver
+      </label>
+      <label class="switch-label">
+        <input type="checkbox" id="gestureToggle">
+        ✋ Gesture Control
       </label>
     </div>
   </div>
@@ -34,6 +39,8 @@
     </ul>
     <div id="qrResult" class="result-box hidden"></div>
     <div id="currencyResult" class="result-box hidden"></div>
+    <div id="sceneSummaryResult" class="result-box hidden"></div>
+    <div id="gestureResult" class="result-box hidden"></div>
   </aside>
 </div>
 {% endblock %}

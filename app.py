@@ -19,17 +19,22 @@ from flask import Flask, Response, jsonify, render_template, request
 import config
 from utils.state import state
 from utils.camera_stream import VideoCamera
-from utils.frame_utils import resize_frame, encode_jpeg, FPSTracker
+from utils.frame_utils import resize_frame, encode_jpeg, is_low_light, FPSTracker
 from utils.logger import get_logger
+from utils.event_log import event_log
 
 from modules.object_detector import ObjectDetector
-from modules.ocr_reader import OCRReader
+from modules.ocr_reader import OCRReader, find_important_keyword
 from modules.speaker import Speaker
 from modules.navigation import NavigationAssistant
 from modules.voice_commands import VoiceCommandListener
 from modules.color_detector import detect_dominant_color
 from modules.currency_detector import CurrencyDetector
 from modules.qr_reader import QRReader
+from modules.memory import memory
+from modules.scene_summary import build_scene_summary
+from modules.fall_detector import FallDetector
+from modules.gesture_recognizer import GESTURE_ACTIONS
 
 log = get_logger()
 
@@ -49,6 +54,10 @@ detector = None
 ocr_reader = None
 currency_detector = None
 qr_reader = None
+depth_estimator = None
+depth_estimator_failed = False  # stop retrying every frame once it's clear it can't load
+gesture_recognizer = None
+gesture_recognizer_failed = False
 
 speaker = Speaker(
     rate=config.TTS_RATE,
@@ -57,6 +66,7 @@ speaker = Speaker(
     cooldown=config.SPEAK_COOLDOWN_SECONDS,
 )
 navigator = NavigationAssistant(near_area_ratio=config.NAV_NEAR_AREA_RATIO)
+fall_detector = FallDetector()
 voice_listener = VoiceCommandListener(
     on_log=lambda msg: state.log_voice(msg),
     is_speaking_check=lambda: speaker.is_speaking,
@@ -68,6 +78,11 @@ _last_nav_instruction = None
 _pending_nav_instruction = None
 _pending_nav_since = 0.0
 NAV_DEBOUNCE_SECONDS = 0.6  # ignore instruction flicker shorter than this
+
+_cached_depth_map = None
+_last_gesture_time = 0.0
+_last_low_light_check = 0.0
+_last_low_light_warning = 0.0
 
 _frame_lock = threading.Lock()
 _annotated_frame = None
@@ -112,6 +127,49 @@ def get_qr_reader():
     return qr_reader
 
 
+def get_depth_estimator():
+    """Return the shared DepthEstimator, or None if disabled/unavailable
+    (e.g. no internet on first use to download MiDaS weights). Failure
+    is remembered so the detection loop doesn't retry the expensive
+    download attempt every single frame."""
+    global depth_estimator, depth_estimator_failed
+    if depth_estimator_failed or not config.ENABLE_DEPTH_ESTIMATION:
+        state.depth_enabled = False
+        return None
+    if depth_estimator is None:
+        try:
+            from modules.depth_estimator import DepthEstimator
+            log.info("Loading MiDaS depth estimation model (first run may take a while)...")
+            depth_estimator = DepthEstimator(device=config.YOLO_DEVICE if config.YOLO_DEVICE != "cpu" else "cpu")
+        except Exception as exc:
+            log.warning("Depth estimation unavailable (%s) - navigation will use the "
+                        "bounding-box-size heuristic instead.", exc)
+            depth_estimator_failed = True
+            state.depth_enabled = False
+            return None
+    state.depth_enabled = True
+    return depth_estimator
+
+
+def get_gesture_recognizer():
+    """Return the shared GestureRecognizer, or None if disabled/
+    unavailable (e.g. no internet on first use to download the
+    landmarker model)."""
+    global gesture_recognizer, gesture_recognizer_failed
+    if gesture_recognizer_failed or not config.ENABLE_GESTURES:
+        return None
+    if gesture_recognizer is None:
+        try:
+            from modules.gesture_recognizer import GestureRecognizer
+            log.info("Loading hand gesture recognition model (first run may take a while)...")
+            gesture_recognizer = GestureRecognizer()
+        except Exception as exc:
+            log.warning("Gesture recognition unavailable (%s).", exc)
+            gesture_recognizer_failed = True
+            return None
+    return gesture_recognizer
+
+
 # ---------------------------------------------------------------------------
 # Camera / detection lifecycle
 # ---------------------------------------------------------------------------
@@ -154,6 +212,8 @@ def _detection_loop():
     camera is active."""
     global _previous_labels, _annotated_frame
     global _last_nav_instruction, _pending_nav_instruction, _pending_nav_since
+    global _cached_depth_map, _last_gesture_time
+    global _last_low_light_check, _last_low_light_warning
 
     fps_tracker = FPSTracker()
     frame_count = 0
@@ -171,6 +231,7 @@ def _detection_loop():
 
         proc_frame = resize_frame(frame, state.resize_scale)
         mode = state.mode
+        now = time.time()
 
         try:
             detections = get_detector().detect(proc_frame)
@@ -190,14 +251,82 @@ def _detection_loop():
             state.last_qr = qr_results
             for qr in qr_results:
                 speaker.speak(f"QR code found: {qr['data']}", dedup_key=f"qr:{qr['data']}")
+                event_log.record("qr_detected", data=qr["data"])
 
         annotated = get_detector().draw_boxes(proc_frame.copy(), detections)
         h, w = proc_frame.shape[:2]
 
-        if mode == "navigation":
-            instruction, zone_map = navigator.analyze(detections, w, h)
-            state.update_navigation(instruction, zone_map)
+        # --- Monocular depth estimation (navigation mode only, ------------
+        # throttled to every DEPTH_FRAME_INTERVAL frames - MiDaS is fast
+        # (~0.1-0.2s on CPU) but still not free enough to run every frame).
+        depth_map = None
+        if mode == "navigation" and config.ENABLE_DEPTH_ESTIMATION:
+            if _cached_depth_map is None or frame_count % config.DEPTH_FRAME_INTERVAL == 0:
+                estimator = get_depth_estimator()
+                if estimator is not None:
+                    try:
+                        _cached_depth_map = estimator.estimate(proc_frame)
+                    except Exception as exc:
+                        log.error("Depth estimation error: %s", exc)
+            depth_map = _cached_depth_map
 
+        # --- Navigation guidance + zone map --------------------------------
+        # Computed every frame regardless of mode (cheap, no model) so
+        # scene summaries and "where is my X" work no matter what mode
+        # is active; only *spoken* when mode == "navigation" below.
+        instruction, zone_map = navigator.analyze(detections, w, h, depth_map=depth_map)
+        state.update_navigation(instruction, zone_map)
+
+        # --- Contextual memory: "where did I last see my bag?" -----------
+        for det in detections:
+            cx = (det["bbox"][0] + det["bbox"][2]) / 2
+            memory.record(det["label"], zone=navigator._zone(cx, w))
+
+        # --- Fall detection (heuristic, experimental) ----------------------
+        if config.ENABLE_FALL_DETECTION:
+            person_boxes = [d["bbox"] for d in detections if d["label"] == "person"]
+            largest_person = (
+                max(person_boxes, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))
+                if person_boxes else None
+            )
+            if fall_detector.update(largest_person):
+                state.fall_detected = True
+                state.last_fall_time = time.strftime("%Y-%m-%d %H:%M:%S")
+                speaker.speak(
+                    "Possible fall detected. Are you okay? This is an automated, "
+                    "experimental check, not a medical alert - please seek help if needed.",
+                    force=True,
+                )
+                event_log.record("possible_fall_detected")
+
+        # --- Low-light warning (cheap heuristic, time-gated) ----------------
+        if now - _last_low_light_check >= config.LOW_LIGHT_CHECK_INTERVAL:
+            _last_low_light_check = now
+            if (is_low_light(proc_frame, threshold=config.LOW_LIGHT_THRESHOLD)
+                    and now - _last_low_light_warning >= config.LOW_LIGHT_WARNING_COOLDOWN):
+                _last_low_light_warning = now
+                speaker.speak("Low light detected. Detection accuracy may be reduced.", force=True)
+
+        # --- Hand gesture recognition (optional, throttled) ------------------
+        if state.gesture_active and frame_count % config.GESTURE_FRAME_INTERVAL == 0:
+            recognizer = get_gesture_recognizer()
+            if recognizer is not None:
+                try:
+                    gesture, annotated = recognizer.process(annotated, draw=True)
+                except Exception as exc:
+                    log.error("Gesture recognition error: %s", exc)
+                    gesture = None
+                if gesture and now - _last_gesture_time >= config.GESTURE_COOLDOWN_SECONDS:
+                    _last_gesture_time = now
+                    state.last_gesture = gesture
+                    action_name = GESTURE_ACTIONS.get(gesture)
+                    event_log.record("gesture_recognized", gesture=gesture, action=action_name)
+                    handler = ACTION_HANDLERS.get(action_name)
+                    if handler:
+                        handler()
+
+        # --- Spoken feedback -------------------------------------------------
+        if mode == "navigation":
             # Bounding boxes flicker frame-to-frame (detection noise can
             # briefly swap which object is "primary"), which used to
             # trigger a burst of rapid-fire speech - fast enough to
@@ -205,7 +334,6 @@ def _detection_loop():
             # silently stops producing audio. Require an instruction to
             # stay stable for NAV_DEBOUNCE_SECONDS before treating it as
             # a real change worth interrupting speech for.
-            now = time.time()
             if instruction != _pending_nav_instruction:
                 _pending_nav_instruction = instruction
                 _pending_nav_since = now
@@ -259,9 +387,28 @@ def _generate_mjpeg():
 
 
 # ---------------------------------------------------------------------------
-# Voice assistant command wiring
+# Voice assistant / gesture command wiring
 # ---------------------------------------------------------------------------
-def _voice_read_text():
+# Both voice commands and hand gestures ultimately trigger one of these
+# named actions - this is the "multimodal control" layer: whichever
+# input the user prefers, the effect is identical. Voice callbacks
+# receive the full heard phrase (used only by _voice_where_is); gesture
+# dispatch calls them with no argument, which is why they all default it.
+def speak_ocr_result(text):
+    """Speak OCR text, calling out important keywords (danger/exit/etc.)
+    first rather than burying them in a long read-out - shared by the
+    voice command and the Capture & Read Text button."""
+    if not text:
+        speaker.speak("No text found.", force=True)
+        return
+    keyword = find_important_keyword(text)
+    if keyword:
+        speaker.speak(f'Attention: this text mentions "{keyword}". {text}', force=True)
+    else:
+        speaker.speak(text, force=True)
+
+
+def _voice_read_text(heard_text=""):
     state.set_redirect("/ocr")
     if camera is None and not start_camera():
         speaker.speak("Could not open the camera.", force=True)
@@ -279,30 +426,62 @@ def _voice_read_text():
         return
     text, _ = get_ocr_reader().read_text(frame, min_confidence=config.OCR_MIN_CONFIDENCE)
     state.last_ocr_text = text
-    speaker.speak(text if text else "No text found.", force=True)
+    speak_ocr_result(text)
+    event_log.record("ocr_read", via="voice/gesture", chars=len(text))
 
 
-def _voice_start_navigation():
+def _voice_start_navigation(heard_text=""):
     state.set_redirect("/navigation")
     if camera is None:
         start_camera()
     state.mode = "navigation"
     speaker.speak("Navigation mode activated.", force=True)
+    event_log.record("mode_change", mode="navigation", via="voice/gesture")
 
 
-def _voice_detect_objects():
+def _voice_detect_objects(heard_text=""):
     state.set_redirect("/live")
     if camera is None:
         start_camera()
     state.mode = "object"
     speaker.speak("Object detection mode activated.", force=True)
+    event_log.record("mode_change", mode="object", via="voice/gesture")
 
 
-def _voice_stop_speaking():
+def _voice_stop_speaking(heard_text=""):
     speaker.stop()
 
 
-def _voice_exit():
+def _voice_repeat(heard_text=""):
+    speaker.repeat_last()
+
+
+def _voice_describe_scene(heard_text=""):
+    if not state.camera_active:
+        speaker.speak("Camera is not active.", force=True)
+        return
+    summary = build_scene_summary(state.detections, state.zone_map)
+    state.last_scene_summary = summary
+    speaker.speak(summary, force=True)
+    event_log.record("scene_described")
+
+
+def _voice_where_is(heard_text=""):
+    entry = memory.find_last(heard_text)
+    speaker.speak(memory.describe(entry), force=True)
+
+
+def _action_toggle_detection(heard_text=""):
+    if state.camera_active:
+        stop_camera()
+        speaker.speak("Detection stopped.", force=True)
+    else:
+        start_camera()
+        speaker.speak("Detection started.", force=True)
+    event_log.record("detection_toggled", via="voice/gesture", active=state.camera_active)
+
+
+def _voice_exit(heard_text=""):
     speaker.speak("Exiting voice assistant.", force=True)
     voice_listener.stop()
     state.voice_active = False
@@ -312,7 +491,24 @@ voice_listener.register("read text", _voice_read_text)
 voice_listener.register("start navigation", _voice_start_navigation)
 voice_listener.register("detect object", _voice_detect_objects)
 voice_listener.register("stop speaking", _voice_stop_speaking)
+voice_listener.register("repeat", _voice_repeat)
+voice_listener.register("describe the scene", _voice_describe_scene)
+voice_listener.register("what is around", _voice_describe_scene)
+voice_listener.register("what's in front", _voice_describe_scene)
+voice_listener.register("where is", _voice_where_is)
+voice_listener.register("where's", _voice_where_is)
 voice_listener.register("exit", _voice_exit)
+
+# Maps a gesture's associated action name (see modules/gesture_recognizer
+# .GESTURE_ACTIONS) to the handler that actually performs it, so a hand
+# gesture and its equivalent spoken command do exactly the same thing.
+ACTION_HANDLERS = {
+    "stop speaking": _voice_stop_speaking,
+    "toggle detection": _action_toggle_detection,
+    "describe scene": _voice_describe_scene,
+    "read text": _voice_read_text,
+    "repeat last announcement": _voice_repeat,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -348,6 +544,11 @@ def about_page():
     return render_template("about.html", active="about")
 
 
+@app.route("/dashboard")
+def dashboard_page():
+    return render_template("dashboard.html", active="dashboard")
+
+
 # ---------------------------------------------------------------------------
 # Camera / streaming API
 # ---------------------------------------------------------------------------
@@ -380,6 +581,7 @@ def api_set_mode():
     _last_nav_instruction = None
     _pending_nav_instruction = None
     _pending_nav_since = 0.0
+    event_log.record("mode_change", mode=mode, via="ui")
     return jsonify({"success": True, "mode": mode})
 
 
@@ -400,7 +602,14 @@ def api_capture_ocr():
         return jsonify({"success": False, "error": "No frame available"}), 400
     text, boxes = get_ocr_reader().read_text(frame, min_confidence=config.OCR_MIN_CONFIDENCE)
     state.last_ocr_text = text
-    return jsonify({"success": True, "text": text, "boxes_found": len(boxes)})
+    important_keyword = find_important_keyword(text) if text else None
+    event_log.record("ocr_read", via="ui", chars=len(text))
+    return jsonify({
+        "success": True,
+        "text": text,
+        "boxes_found": len(boxes),
+        "important_keyword": important_keyword,
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -421,36 +630,102 @@ def api_capture_currency():
     state.last_currency = result
     if result:
         speaker.speak(f"{result['denomination']} rupee note detected", force=True)
+        event_log.record("currency_detected", denomination=result["denomination"])
     else:
         speaker.speak("Currency not recognized", force=True)
     return jsonify({"success": True, "result": result})
+
+
+@app.route("/describe_scene", methods=["POST"])
+def api_describe_scene():
+    """On-demand scene summary - the same thing the "describe the
+    scene" voice command / one-finger gesture trigger, exposed as a
+    button for sighted testers/graders too."""
+    if not state.camera_active:
+        return jsonify({"success": False, "error": "Camera not active"}), 400
+    summary = build_scene_summary(state.detections, state.zone_map)
+    state.last_scene_summary = summary
+    speaker.speak(summary, force=True)
+    event_log.record("scene_described", via="ui")
+    return jsonify({"success": True, "summary": summary})
+
+
+@app.route("/memory/where_is", methods=["POST"])
+def api_memory_where_is():
+    """Text-box equivalent of the "where is my X" voice command, for
+    testing without a microphone."""
+    data = request.get_json(force=True, silent=True) or {}
+    query = data.get("query", "")
+    entry = memory.find_last(query)
+    answer = memory.describe(entry)
+    speaker.speak(answer, force=True)
+    return jsonify({"success": True, "answer": answer, "found": entry is not None})
 
 
 @app.route("/sos", methods=["POST"])
 def api_sos():
     state.sos_active = True
     state.last_sos_time = time.strftime("%Y-%m-%d %H:%M:%S")
-    speaker.speak("Emergency S O S activated. Alerting your emergency contact.", force=True)
+    if state.user_location:
+        loc = state.user_location
+        location_phrase = f" Your location is latitude {loc['latitude']:.4f}, longitude {loc['longitude']:.4f}."
+    else:
+        location_phrase = " Location unavailable - enable location sharing in your browser for this to include it."
+    speaker.speak(
+        f"Emergency S O S activated. Alerting your emergency contact.{location_phrase}",
+        force=True,
+    )
     log.warning("SOS TRIGGERED at %s", state.last_sos_time)
+    event_log.record("sos_triggered", location=state.user_location)
     return jsonify({
         "success": True,
         "message": "SOS alert triggered (simulated).",
         "contact_name": config.SOS_EMERGENCY_CONTACT,
         "contact_phone": config.SOS_EMERGENCY_PHONE,
         "time": state.last_sos_time,
+        "location": state.user_location,
     })
+
+
+@app.route("/location", methods=["POST"])
+def api_location():
+    """Receives real coordinates from the browser's Geolocation API
+    (see static/js/main.js) - this is "real GPS" in the sense that
+    modern browsers resolve it from the visitor's own device (Wi-Fi/
+    cell/GPS chip), not from anything the Python server has access to
+    directly."""
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        latitude = float(data["latitude"])
+        longitude = float(data["longitude"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"success": False, "error": "latitude/longitude required"}), 400
+    accuracy = data.get("accuracy")
+    state.set_location(latitude, longitude, accuracy)
+    return jsonify({"success": True, "location": state.user_location})
 
 
 @app.route("/gps")
 def api_gps():
-    # Placeholder: no GPS hardware wired up. Swap this with a real serial
-    # / USB GPS module reader (e.g. pynmea2 + pyserial) for a physical
-    # device build.
+    if state.user_location:
+        return jsonify({
+            "success": True,
+            "latitude": state.user_location["latitude"],
+            "longitude": state.user_location["longitude"],
+            "accuracy": state.user_location.get("accuracy"),
+            "source": "browser_geolocation",
+            "note": "Real location reported by your browser.",
+        })
+    # Fallback: no location reported by the browser yet (permission
+    # denied, insecure context, or JS hasn't run). Swap this with a real
+    # serial/USB GPS module reader (e.g. pynmea2 + pyserial) for a
+    # physical, browser-independent device build.
     return jsonify({
         "success": True,
         "latitude": config.GPS_MOCK_LAT,
         "longitude": config.GPS_MOCK_LNG,
-        "note": "Mock GPS coordinates - connect real GPS hardware for live location.",
+        "source": "mock",
+        "note": "Mock coordinates - no browser location reported yet (check location permission).",
     })
 
 
@@ -461,13 +736,45 @@ def api_settings():
         state.battery_saver = bool(data["battery_saver"])
         state.frame_skip = 3 if state.battery_saver else config.DEFAULT_FRAME_SKIP
         state.resize_scale = 0.6 if state.battery_saver else config.DEFAULT_RESIZE_SCALE
+    if "gesture_active" in data:
+        state.gesture_active = bool(data["gesture_active"])
+        event_log.record("gesture_control_toggled", active=state.gesture_active)
     return jsonify({
         "success": True,
         "settings": {
             "battery_saver": state.battery_saver,
             "frame_skip": state.frame_skip,
             "resize_scale": state.resize_scale,
+            "gesture_active": state.gesture_active,
         },
+    })
+
+
+@app.route("/api/metrics")
+def api_metrics():
+    """Backs the /dashboard page: live FPS/mode, event counters, recent
+    event log, and basic process resource usage."""
+    try:
+        import psutil
+        process = psutil.Process(os.getpid())
+        cpu_percent = psutil.cpu_percent(interval=None)
+        memory_mb = round(process.memory_info().rss / (1024 * 1024), 1)
+    except Exception:
+        cpu_percent, memory_mb = None, None
+
+    return jsonify({
+        "success": True,
+        "uptime_seconds": round(event_log.uptime_seconds, 1),
+        "fps": state.fps,
+        "mode": state.mode,
+        "camera_active": state.camera_active,
+        "voice_active": state.voice_active,
+        "gesture_active": state.gesture_active,
+        "depth_enabled": state.depth_enabled,
+        "cpu_percent": cpu_percent,
+        "memory_mb": memory_mb,
+        "event_counters": event_log.counters(),
+        "recent_events": event_log.recent(30),
     })
 
 

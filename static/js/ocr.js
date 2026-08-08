@@ -65,6 +65,9 @@
     const data = await res.json();
     if (data.success) {
       ocrText.value = data.text || "No text detected.";
+      if (data.important_keyword) {
+        window.showToast(`⚠️ This text mentions "${data.important_keyword}"`, 6000);
+      }
     } else {
       ocrText.value = "";
       window.showToast(data.error || "OCR failed.");

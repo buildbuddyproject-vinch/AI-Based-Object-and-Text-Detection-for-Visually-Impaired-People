@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - AI Blind Assistant{% endblock %}
+{% block content %}
+<section class="page-header">
+  <h1>System Dashboard</h1>
+  <p>Live engineering metrics - performance, feature status, and recent activity.</p>
+</section>
+
+<div class="dashboard-grid">
+  <div class="stat-tile">
+    <span class="stat-label">FPS</span>
+    <span class="stat-value" id="statFps">-</span>
+  </div>
+  <div class="stat-tile">
+    <span class="stat-label">Mode</span>
+    <span class="stat-value" id="statMode">-</span>
+  </div>
+  <div class="stat-tile">
+    <span class="stat-label">Uptime</span>
+    <span class="stat-value" id="statUptime">-</span>
+  </div>
+  <div class="stat-tile">
+    <span class="stat-label">CPU</span>
+    <span class="stat-value" id="statCpu">-</span>
+  </div>
+  <div class="stat-tile">
+    <span class="stat-label">Memory</span>
+    <span class="stat-value" id="statMemory">-</span>
+  </div>
+</div>
+
+<div class="panel-grid">
+  <div class="panel">
+    <h2>Feature Status</h2>
+    <ul class="status-list">
+      <li>Camera <span id="statusCamera" class="status-badge">-</span></li>
+      <li>Voice Assistant <span id="statusVoice" class="status-badge">-</span></li>
+      <li>Gesture Control <span id="statusGesture" class="status-badge">-</span></li>
+      <li>Depth Estimation <span id="statusDepth" class="status-badge">-</span></li>
+    </ul>
+
+    <h2>Event Counters</h2>
+    <ul id="eventCounters" class="counter-list">
+      <li class="empty-state">No events yet.</li>
+    </ul>
+  </div>
+
+  <aside class="panel">
+    <h2>Recent Events</h2>
+    <ul id="recentEvents" class="event-list">
+      <li class="empty-state">No activity yet.</li>
+    </ul>
+  </aside>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+{% endblock %}

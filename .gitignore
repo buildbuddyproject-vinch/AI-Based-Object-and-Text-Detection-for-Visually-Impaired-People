@@ -6,8 +6,10 @@ __pycache__/
 venv/
 env/
 
-# Model weights (downloaded, not committed)
+# Model weights (downloaded/exported, not committed)
 weights/*.pt
+weights/*.onnx
+weights/*.task
 !weights/.gitkeep
 
 # Currency reference images (user-provided, not committed)
@@ -15,8 +17,12 @@ dataset/currency/*
 !dataset/currency/.gitkeep
 !dataset/currency/README.md
 
-# EasyOCR / model caches if run inside the repo
+# EasyOCR / torch hub / model caches if run inside the repo
 .EasyOCR/
+.cache/
+
+# Structured event log (see utils/event_log.py)
+logs/
 
 # Logs
 *.log

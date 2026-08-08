@@ -47,6 +47,26 @@ class AppState:
         self.sos_active = False
         self.last_sos_time = None
 
+        # Real GPS coordinates reported by the browser's Geolocation API
+        # (see static/js/main.js) - None until a page successfully gets a
+        # location, at which point /gps prefers this over the mock
+        # coordinates in config.py.
+        self.user_location = None
+
+        # Scene summary (on-demand natural-language description)
+        self.last_scene_summary = ""
+
+        # Monocular depth estimation availability/state
+        self.depth_enabled = False
+
+        # Heuristic fall detection
+        self.fall_detected = False
+        self.last_fall_time = None
+
+        # Hand gesture recognition
+        self.gesture_active = False
+        self.last_gesture = None
+
     def update_detections(self, detections, fps):
         with self.lock:
             self.detections = detections
@@ -73,6 +93,15 @@ class AppState:
             path, self.pending_redirect = self.pending_redirect, None
             return path
 
+    def set_location(self, latitude, longitude, accuracy=None):
+        with self.lock:
+            self.user_location = {
+                "latitude": latitude,
+                "longitude": longitude,
+                "accuracy": accuracy,
+                "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+
     def snapshot(self):
         """Return a plain-dict copy of the current state, safe to
         json-serialize directly for the polling API endpoints."""
@@ -93,6 +122,12 @@ class AppState:
                 "resize_scale": self.resize_scale,
                 "battery_saver": self.battery_saver,
                 "sos_active": self.sos_active,
+                "user_location": dict(self.user_location) if self.user_location else None,
+                "last_scene_summary": self.last_scene_summary,
+                "depth_enabled": self.depth_enabled,
+                "fall_detected": self.fall_detected,
+                "gesture_active": self.gesture_active,
+                "last_gesture": self.last_gesture,
             }
 
 

@@ -27,6 +27,29 @@ PyAudio>=0.2.13
 # earlier session (see modules/speaker.py::_force_full_volume_windows).
 pycaw>=20240111; sys_platform == "win32"
 
+# System monitoring for the /dashboard page (CPU/memory usage)
+psutil>=5.9
+
+# Monocular depth estimation (modules/depth_estimator.py) - MiDaS itself
+# downloads via torch.hub at runtime (torch/torchvision already pulled
+# in by ultralytics above); timm is a hard dependency of MiDaS's
+# backbone network.
+timm>=1.0
+
+# Hand gesture recognition (modules/gesture_recognizer.py). Pulls in
+# opencv-contrib-python as a hard dependency, which - unlike
+# opencv-python-headless above - needs system X11/libGL libraries, so
+# this is deliberately left out of requirements-render.txt (gesture
+# control needs a real camera anyway, which a cloud host doesn't have -
+# see README.md -> "Deployment").
+mediapipe>=1.0
+
+# Faster CPU inference for YOLOv8 (optional - see export_onnx.py and
+# config.py's YOLO_WEIGHTS_PATH comment). Only actually used if you
+# point YOLO_WEIGHTS_PATH at a .onnx file; harmless to have installed
+# otherwise.
+onnxruntime>=1.20
+
 # Notes:
 # - `ultralytics` and `easyocr` pull in torch/torchvision automatically;
 #   the first `pip install` may take a while and download several

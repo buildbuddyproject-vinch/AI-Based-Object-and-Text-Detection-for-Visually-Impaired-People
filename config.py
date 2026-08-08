@@ -15,6 +15,10 @@ FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 
 # --- YOLOv8 object detection --------------------------------------------
+# Run `python export_onnx.py` once, then point this at the .onnx file
+# instead for meaningfully faster CPU inference (Ultralytics loads
+# either format transparently - no other code changes needed). Stick
+# with .pt if you ever move to a GPU host.
 YOLO_WEIGHTS_PATH = os.path.join(BASE_DIR, "weights", "yolov8n.pt")
 YOLO_CONFIDENCE = 0.45
 YOLO_DEVICE = os.environ.get("YOLO_DEVICE", "cpu")  # "cpu" or "0" for first GPU
@@ -32,6 +36,32 @@ SPEAK_COOLDOWN_SECONDS = 6.0
 
 # --- Navigation heuristics -------------------------------------------------
 NAV_NEAR_AREA_RATIO = 0.18  # bbox_area / frame_area above this => "close"
+
+# --- Monocular depth estimation (MiDaS-small) -------------------------------
+# Adds a real per-pixel relative-depth signal to navigation guidance
+# instead of only the bbox-size heuristic above. Downloads model weights
+# via torch.hub on first use (needs internet then; cached after).
+# Disable if that download isn't possible, or if the extra ~0.1-0.2s/
+# frame inference cost is too much for your hardware.
+ENABLE_DEPTH_ESTIMATION = os.environ.get("ENABLE_DEPTH_ESTIMATION", "1") == "1"
+DEPTH_FRAME_INTERVAL = 3  # only re-run depth every Nth navigation-mode frame
+
+# --- Hand gesture recognition (MediaPipe) -----------------------------------
+# Downloads a small (~a few MB) landmarker model on first use.
+ENABLE_GESTURES = os.environ.get("ENABLE_GESTURES", "1") == "1"
+GESTURE_FRAME_INTERVAL = 2       # process every Nth frame while enabled
+GESTURE_COOLDOWN_SECONDS = 2.5   # don't re-trigger the same gesture faster than this
+
+# --- Low-light detection -----------------------------------------------------
+LOW_LIGHT_THRESHOLD = 60          # mean grayscale brightness (0-255) below this = "dark"
+LOW_LIGHT_CHECK_INTERVAL = 2.0    # seconds between brightness checks
+LOW_LIGHT_WARNING_COOLDOWN = 30.0  # don't repeat the spoken warning faster than this
+
+# --- Fall detection (heuristic, experimental - see modules/fall_detector.py)
+ENABLE_FALL_DETECTION = os.environ.get("ENABLE_FALL_DETECTION", "1") == "1"
+
+# --- Contextual memory ("where is my X") -------------------------------------
+MEMORY_RETENTION_SECONDS = 600  # how long a "last seen" answer stays valid
 
 # --- Performance / battery optimization ------------------------------------
 DEFAULT_FRAME_SKIP = 1        # process every Nth grabbed frame

@@ -11,6 +11,14 @@
 # see README.md -> "Deployment" for the full explanation of what does
 # and doesn't work when this app is hosted in the cloud rather than run
 # locally.
+#
+# Excludes mediapipe (hand gesture recognition): it pulls in
+# opencv-contrib-python as a hard dependency, which - unlike the
+# opencv-python-headless used here - needs system X11/libGL libraries
+# that a minimal container usually lacks, and would risk breaking the
+# *whole app's* ability to even import cv2. Not a loss in practice:
+# gesture control needs a real camera, which the cloud host doesn't
+# have either.
 
 # Core web backend
 flask>=3.0
@@ -33,6 +41,16 @@ pyttsx3>=2.90
 # only creating an actual sr.Microphone() at runtime needs it, and that
 # failure is already caught and logged, not fatal.
 SpeechRecognition>=3.10
+
+# System monitoring for the /dashboard page.
+psutil>=5.9
+
+# Monocular depth estimation - safe here, no opencv-contrib conflict.
+timm>=1.0
+
+# Faster CPU inference for YOLOv8, if you export to ONNX (see
+# export_onnx.py). Harmless to have installed even if you don't.
+onnxruntime>=1.20
 
 # pycaw is Windows-only (see requirements.txt) and is skipped
 # automatically via its environment marker - no need to list it here.

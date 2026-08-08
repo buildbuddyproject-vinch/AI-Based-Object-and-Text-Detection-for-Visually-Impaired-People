@@ -5,11 +5,19 @@ Listens on the microphone in a background thread using SpeechRecognition
 and dispatches recognized phrases to registered callback functions.
 
 Supported commands (registered by app.py):
-    "read text"          -> capture the current frame with OCR and read it
-    "start navigation"    -> switch live detection into navigation mode
-    "detect objects"      -> switch live detection back to object mode
-    "stop speaking"        -> interrupt/clear current speech
-    "exit"                  -> stop the voice assistant thread
+    "read text"           -> capture the current frame with OCR and read it
+    "start navigation"     -> switch live detection into navigation mode
+    "detect objects"       -> switch live detection back to object mode
+    "stop speaking"         -> interrupt/clear current speech
+    "repeat"                -> speak the last announcement again
+    "describe the scene"     -> summarize what's currently detected
+    "where is my <object>"   -> answer from recent detection memory
+    "exit"                    -> stop the voice assistant thread
+
+Each registered callback receives the full recognized phrase as its
+only argument (e.g. "where is my backpack") so commands like "where is
+my X" can parse out what comes after the fixed prefix - callbacks that
+don't need it can just ignore the parameter.
 
 The default recognizer (`recognize_google`) requires an internet
 connection. To run fully offline, install `vosk` and swap the body of
@@ -41,7 +49,10 @@ class VoiceCommandListener:
 
     def register(self, phrase, callback):
         """Register `callback` to fire whenever `phrase` is heard as a
-        substring of the recognized speech (case-insensitive)."""
+        substring of the recognized speech (case-insensitive). `callback`
+        is invoked as `callback(heard_text)` with the full recognized
+        phrase, so pattern-style commands (e.g. "where is my X") can
+        extract what follows the fixed prefix."""
         self._callbacks[phrase.lower()] = callback
 
     def _log(self, msg):
@@ -64,7 +75,7 @@ class VoiceCommandListener:
             if phrase in text:
                 matched = True
                 try:
-                    callback()
+                    callback(text)
                 except Exception as exc:
                     self._log(f"Command '{phrase}' failed: {exc}")
         if not matched:

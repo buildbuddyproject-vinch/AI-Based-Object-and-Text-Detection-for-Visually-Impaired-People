@@ -15,12 +15,21 @@
 
     <h2>Available Commands</h2>
     <ul class="command-list">
-      <li><strong>"Read text"</strong> &mdash; capture and read text aloud</li>
-      <li><strong>"Start navigation"</strong> &mdash; switch to navigation mode</li>
+      <li><strong>"Read text"</strong> &mdash; capture and read text aloud (auto-starts the camera)</li>
+      <li><strong>"Start navigation"</strong> &mdash; switch to navigation mode (auto-starts the camera)</li>
       <li><strong>"Detect objects"</strong> &mdash; switch to object detection mode</li>
       <li><strong>"Stop speaking"</strong> &mdash; interrupt current speech</li>
+      <li><strong>"Repeat"</strong> &mdash; say the last announcement again</li>
+      <li><strong>"Describe the scene"</strong> &mdash; summarize what's currently detected</li>
+      <li><strong>"Where is my &lt;object&gt;"</strong> &mdash; e.g. "where is my bag" (answers from recent memory)</li>
       <li><strong>"Exit"</strong> &mdash; stop the voice assistant</li>
     </ul>
+    <p class="hint-text">
+      🖐️ These same actions are also available as hand gestures on the
+      <a href="{{ url_for('live') }}">Live Camera</a> page (enable "Gesture Control"):
+      fist = toggle detection, open palm = stop speaking, peace sign = read text,
+      one finger = describe scene, thumbs up = repeat.
+    </p>
 
     <h2>Activity Log</h2>
     <ul id="voiceLog" class="voice-log" aria-live="polite">

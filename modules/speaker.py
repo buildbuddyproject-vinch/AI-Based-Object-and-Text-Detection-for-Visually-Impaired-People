@@ -99,6 +99,10 @@ class Speaker:
         # utterance is actively playing, so stop() has something to
         # terminate.
         self._current_process = None
+        # The last non-dedup-skipped phrase actually queued, so a
+        # "repeat that" voice command / gesture has something to say
+        # again - see repeat_last().
+        self._last_text = None
         # Lets other components (the voice command listener, in
         # particular) know not to have the microphone listen while the
         # assistant is talking - otherwise it hears its own voice and
@@ -187,8 +191,18 @@ class Speaker:
         # stale speech behind the live feed.
         if self._queue.qsize() < 10:
             self._queue.put(text)
+            self._last_text = text
         else:
             log.warning('Speech queue full - dropped: "%s"', text)
+
+    def repeat_last(self):
+        """Speak the last phrase that was actually queued again (for a
+        "repeat that" voice command or gesture). No-op if nothing has
+        been spoken yet."""
+        if self._last_text:
+            self.speak(self._last_text, force=True)
+        else:
+            self.speak("I haven't said anything yet.", force=True)
 
     def stop(self):
         """Clear any pending speech and interrupt what is currently
