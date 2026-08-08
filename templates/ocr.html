@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}OCR - AI Blind Assistant{% endblock %}
+{% block content %}
+<section class="page-header">
+  <h1>Text Reader (OCR)</h1>
+  <p>Point the camera at printed text, then capture to extract and hear it read aloud.</p>
+</section>
+
+<div class="panel-grid">
+  <div class="panel camera-panel">
+    <div class="camera-frame">
+      <img id="videoFeed" src="" alt="Live camera feed for OCR capture">
+      <div id="cameraPlaceholder" class="camera-placeholder"><p>Camera is off</p></div>
+    </div>
+    <div class="camera-controls">
+      <button id="toggleCameraBtn" class="btn btn-primary">Start Camera</button>
+      <button id="captureOcrBtn" class="btn btn-accent btn-lg">📸 Capture &amp; Read Text</button>
+    </div>
+  </div>
+
+  <aside class="panel ocr-panel">
+    <h2>Extracted Text</h2>
+    <label for="ocrText" class="visually-hidden">Extracted text</label>
+    <textarea id="ocrText" rows="10" readonly placeholder="Captured text will appear here..."></textarea>
+    <div class="ocr-actions">
+      <button id="readAloudBtn" class="btn btn-primary">🔊 Read Aloud</button>
+      <button id="stopSpeakingBtn" class="btn btn-ghost">⏹ Stop</button>
+    </div>
+  </aside>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/ocr.js') }}"></script>
+{% endblock %}

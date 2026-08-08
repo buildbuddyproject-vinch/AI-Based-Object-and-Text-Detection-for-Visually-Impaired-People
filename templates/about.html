@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}About - AI Blind Assistant{% endblock %}
+{% block content %}
+<section class="page-header">
+  <h1>About This Project</h1>
+</section>
+<div class="about-content">
+  <p>
+    <strong>AI-Based Object and Text Detection for Visually Impaired People</strong>
+    is a final-year engineering project that combines computer vision and
+    offline speech synthesis to help visually impaired users understand
+    their surroundings.
+  </p>
+
+  <h2>How It Works</h2>
+  <ul>
+    <li><strong>YOLOv8</strong> detects objects in the live camera feed in real time.</li>
+    <li><strong>EasyOCR</strong> extracts printed text from captured frames.</li>
+    <li><strong>pyttsx3</strong> converts results to speech completely offline.</li>
+    <li><strong>Navigation logic</strong> estimates obstacle position (left/center/right) from bounding boxes.</li>
+    <li><strong>SpeechRecognition</strong> powers hands-free voice commands.</li>
+  </ul>
+
+  <h2>Bonus Features</h2>
+  <ul>
+    <li>Dominant color detection for detected objects</li>
+    <li>Heuristic currency note recognition (extensible with a trained model)</li>
+    <li>QR code scanning</li>
+    <li>Emergency SOS alert button</li>
+    <li>GPS placeholder for location sharing</li>
+    <li>Battery saver / performance mode</li>
+  </ul>
+
+  <h2>Tech Stack</h2>
+  <ul>
+    <li>Backend: Python, Flask</li>
+    <li>AI: YOLOv8 (Ultralytics), EasyOCR, OpenCV, pyttsx3, SpeechRecognition</li>
+    <li>Frontend: HTML, CSS, JavaScript (responsive, accessibility-first UI)</li>
+  </ul>
+
+  <h2>Disclaimer</h2>
+  <p>
+    This is an academic prototype. Distance/navigation guidance is heuristic
+    (monocular, no depth sensor) and should not be relied upon as a sole
+    mobility aid.
+  </p>
+</div>
+{% endblock %}

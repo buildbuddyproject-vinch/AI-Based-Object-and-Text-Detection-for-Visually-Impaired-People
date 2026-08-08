@@ -1,0 +1,30 @@
+# Core web backend
+flask>=3.0
+
+# Computer vision / AI
+opencv-python>=4.9
+ultralytics>=8.2
+easyocr>=1.7
+numpy>=1.26
+Pillow>=10.0
+
+# Offline text-to-speech
+pyttsx3>=2.90
+
+# Voice assistant (microphone speech recognition)
+SpeechRecognition>=3.10
+PyAudio>=0.2.13
+
+# Windows-only: lets the Speaker force its own audio session to full
+# volume, working around a real-world Windows quirk where the OS Volume
+# Mixer silently pins python.exe to a near-zero level from an unrelated
+# earlier session (see modules/speaker.py::_force_full_volume_windows).
+pycaw>=20240111; sys_platform == "win32"
+
+# Notes:
+# - `ultralytics` and `easyocr` pull in torch/torchvision automatically;
+#   the first `pip install` may take a while and download several
+#   hundred MB.
+# - PyAudio has no pure-Python wheel for every Python version on
+#   Windows. If `pip install PyAudio` fails, see README.md ->
+#   "Troubleshooting" for the pipwin / prebuilt-wheel workaround.

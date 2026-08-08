@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Navigation - AI Blind Assistant{% endblock %}
+{% block content %}
+<section class="page-header">
+  <h1>Navigation Mode</h1>
+  <p>Get spoken left / center / right guidance about obstacles ahead.</p>
+</section>
+
+<div class="panel-grid">
+  <div class="panel camera-panel">
+    <div class="camera-frame">
+      <img id="videoFeed" src="" alt="Live camera feed with navigation overlays">
+      <div id="cameraPlaceholder" class="camera-placeholder"><p>Camera is off</p></div>
+    </div>
+    <div class="camera-controls">
+      <button id="toggleCameraBtn" class="btn btn-primary">Start Camera</button>
+      <button id="toggleNavBtn" class="btn btn-accent">🧭 Start Navigation</button>
+    </div>
+  </div>
+
+  <aside class="panel nav-panel">
+    <h2>Guidance</h2>
+    <p id="navInstruction" class="nav-instruction">Path looks clear.</p>
+    <div class="zone-map">
+      <div class="zone" id="zoneLeft"><h3>Left</h3><ul></ul></div>
+      <div class="zone" id="zoneCenter"><h3>Center</h3><ul></ul></div>
+      <div class="zone" id="zoneRight"><h3>Right</h3><ul></ul></div>
+    </div>
+  </aside>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/navigation.js') }}"></script>
+{% endblock %}

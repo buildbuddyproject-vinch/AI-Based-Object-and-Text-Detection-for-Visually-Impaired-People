@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# Model weights (downloaded, not committed)
+weights/*.pt
+!weights/.gitkeep
+
+# Currency reference images (user-provided, not committed)
+dataset/currency/*
+!dataset/currency/.gitkeep
+!dataset/currency/README.md
+
+# EasyOCR / model caches if run inside the repo
+.EasyOCR/
+
+# Logs
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Claude Code local tool artifacts
+.claude/

@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Home - AI Blind Assistant{% endblock %}
+{% block content %}
+<section class="hero">
+  <div class="hero-text">
+    <h1>See the World Through Sound</h1>
+    <p class="lead">
+      An AI-powered assistant that detects objects, reads printed text, and
+      guides navigation in real time &mdash; built for visually impaired users.
+    </p>
+    <div class="hero-actions">
+      <a href="{{ url_for('live') }}" class="btn btn-primary btn-lg">
+        <span aria-hidden="true">📷</span> Start Camera
+      </a>
+      <a href="{{ url_for('voice_page') }}" class="btn btn-secondary btn-lg">
+        <span aria-hidden="true">🎙️</span> Voice Assistant
+      </a>
+      <a href="{{ url_for('about_page') }}" class="btn btn-ghost btn-lg">About Project</a>
+    </div>
+  </div>
+</section>
+
+<section class="feature-grid" aria-label="Features">
+  <a href="{{ url_for('live') }}" class="feature-card">
+    <div class="feature-icon" aria-hidden="true">🧠</div>
+    <h2>Object Detection</h2>
+    <p>Real-time YOLOv8 detection with spoken confirmations of what's around you.</p>
+  </a>
+  <a href="{{ url_for('ocr_page') }}" class="feature-card">
+    <div class="feature-icon" aria-hidden="true">📖</div>
+    <h2>Text Reading (OCR)</h2>
+    <p>Capture any printed text and have it read aloud instantly, fully offline.</p>
+  </a>
+  <a href="{{ url_for('navigation_page') }}" class="feature-card">
+    <div class="feature-icon" aria-hidden="true">🧭</div>
+    <h2>Navigation Mode</h2>
+    <p>Left / center / right obstacle guidance with clear spoken directions.</p>
+  </a>
+  <a href="{{ url_for('voice_page') }}" class="feature-card">
+    <div class="feature-icon" aria-hidden="true">🎙️</div>
+    <h2>Voice Assistant</h2>
+    <p>Hands-free control &mdash; "read text", "start navigation", "exit".</p>
+  </a>
+</section>
+
+<section class="bonus-section">
+  <h2>Bonus Accessibility Tools</h2>
+  <div class="bonus-grid">
+    <div class="bonus-card">🎨 Color Detection</div>
+    <div class="bonus-card">💵 Currency Detection</div>
+    <div class="bonus-card">🔳 QR Code Reader</div>
+    <div class="bonus-card">🆘 Emergency SOS</div>
+    <div class="bonus-card">📍 GPS Location</div>
+    <div class="bonus-card">🔋 Battery Saver Mode</div>
+  </div>
+</section>
+{% endblock %}

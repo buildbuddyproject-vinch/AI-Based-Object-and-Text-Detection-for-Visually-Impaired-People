@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Voice Assistant - AI Blind Assistant{% endblock %}
+{% block content %}
+<section class="page-header">
+  <h1>Voice Assistant</h1>
+  <p>Control the assistant hands-free using speech commands.</p>
+</section>
+
+<div class="panel-grid single">
+  <div class="panel voice-panel">
+    <button id="micBtn" class="mic-btn" aria-pressed="false">
+      <span class="mic-icon" aria-hidden="true">🎙️</span>
+      <span id="micLabel">Start Listening</span>
+    </button>
+
+    <h2>Available Commands</h2>
+    <ul class="command-list">
+      <li><strong>"Read text"</strong> &mdash; capture and read text aloud</li>
+      <li><strong>"Start navigation"</strong> &mdash; switch to navigation mode</li>
+      <li><strong>"Detect objects"</strong> &mdash; switch to object detection mode</li>
+      <li><strong>"Stop speaking"</strong> &mdash; interrupt current speech</li>
+      <li><strong>"Exit"</strong> &mdash; stop the voice assistant</li>
+    </ul>
+
+    <h2>Activity Log</h2>
+    <ul id="voiceLog" class="voice-log" aria-live="polite">
+      <li class="empty-state">No activity yet.</li>
+    </ul>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/voice.js') }}"></script>
+{% endblock %}

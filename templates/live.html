@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Live Camera - AI Blind Assistant{% endblock %}
+{% block content %}
+<section class="page-header">
+  <h1>Live Camera &amp; Object Detection</h1>
+  <p>Point the camera around you. Newly detected objects are announced aloud.</p>
+</section>
+
+<div class="panel-grid">
+  <div class="panel camera-panel">
+    <div class="camera-frame">
+      <img id="videoFeed" src="" alt="Live camera feed with object detection overlays">
+      <div id="cameraPlaceholder" class="camera-placeholder"><p>Camera is off</p></div>
+    </div>
+    <div class="camera-controls">
+      <button id="toggleCameraBtn" class="btn btn-primary">Start Camera</button>
+      <div class="mode-switch" role="group" aria-label="Detection mode">
+        <button class="mode-btn active" data-mode="object">Object</button>
+        <button class="mode-btn" data-mode="color">Color</button>
+        <button class="mode-btn" data-mode="qr">QR Code</button>
+      </div>
+      <button id="captureCurrencyBtn" class="btn btn-secondary">💵 Detect Currency</button>
+      <label class="switch-label">
+        <input type="checkbox" id="batterySaverToggle">
+        🔋 Battery Saver
+      </label>
+    </div>
+  </div>
+
+  <aside class="panel detection-panel">
+    <h2>Detections <span id="fpsBadge" class="badge">0 FPS</span></h2>
+    <ul id="detectionList" class="detection-list">
+      <li class="empty-state">No detections yet.</li>
+    </ul>
+    <div id="qrResult" class="result-box hidden"></div>
+    <div id="currencyResult" class="result-box hidden"></div>
+  </aside>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/camera.js') }}"></script>
+{% endblock %}

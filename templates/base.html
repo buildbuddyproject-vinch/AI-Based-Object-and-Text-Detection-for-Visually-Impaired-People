@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}AI Blind Assistant{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<a href="#main-content" class="skip-link">Skip to main content</a>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a href="{{ url_for('index') }}" class="brand">
+      <span class="brand-icon" aria-hidden="true">👁️</span>
+      <span>AI Blind Assistant</span>
+    </a>
+    <nav class="main-nav" aria-label="Main navigation">
+      <a href="{{ url_for('index') }}" class="{{ 'active' if active=='home' else '' }}">Home</a>
+      <a href="{{ url_for('live') }}" class="{{ 'active' if active=='live' else '' }}">Live Camera</a>
+      <a href="{{ url_for('ocr_page') }}" class="{{ 'active' if active=='ocr' else '' }}">OCR</a>
+      <a href="{{ url_for('navigation_page') }}" class="{{ 'active' if active=='navigation' else '' }}">Navigation</a>
+      <a href="{{ url_for('voice_page') }}" class="{{ 'active' if active=='voice' else '' }}">Voice Assistant</a>
+      <a href="{{ url_for('about_page') }}" class="{{ 'active' if active=='about' else '' }}">About</a>
+    </nav>
+    <div class="header-actions">
+      <button id="darkModeToggle" class="icon-btn" aria-label="Toggle dark mode" title="Toggle dark mode">🌙</button>
+      <button id="sosBtn" class="sos-btn" aria-label="Trigger emergency SOS alert">SOS</button>
+    </div>
+  </div>
+</header>
+
+<main id="main-content">
+  {% block content %}{% endblock %}
+</main>
+
+<footer class="site-footer">
+  <p>AI-Based Object and Text Detection for Visually Impaired People</p>
+</footer>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script src="{{ url_for('static', filename='js/main.js') }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>
