@@ -1,0 +1,26 @@
+# Render "Blueprint" - lets you deploy this app with one click via
+# https://render.com/docs/blueprint-spec (New -> Blueprint -> point at
+# this repo). You can also skip this file entirely and configure a Web
+# Service manually in the Render dashboard using the same build/start
+# commands below.
+#
+# IMPORTANT: read the "Deployment" section of README.md before relying
+# on this - a cloud host has no webcam, microphone, or speakers, so
+# Live Camera / OCR / Navigation / Voice Assistant / audio narration
+# will not work for visitors. This is meant for demoing the UI and the
+# non-hardware API endpoints (Home, About, SOS, GPS placeholder,
+# settings), not as a way to give remote users a working camera feed.
+services:
+  - type: web
+    name: ai-blind-assistant
+    runtime: python
+    plan: free
+    branch: main
+    buildCommand: "pip install --upgrade pip && pip install -r requirements-render.txt && python download_weights.py"
+    startCommand: "gunicorn --workers 1 --threads 4 --timeout 120 --bind 0.0.0.0:$PORT app:app"
+    envVars:
+      - key: FLASK_DEBUG
+        value: "0"
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+    healthCheckPath: /

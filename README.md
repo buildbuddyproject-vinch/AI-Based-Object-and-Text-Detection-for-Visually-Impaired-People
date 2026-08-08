@@ -286,6 +286,80 @@ Unofficial Windows Binaries page and `pip install <file>.whl`.
 
 ---
 
+## ☁️ Deployment
+
+### ⚠️ Read this before deploying to Render, Vercel, or any cloud host
+
+This app talks to hardware **on the machine running `app.py`**, not the
+visitor's browser:
+
+- `cv2.VideoCapture(0)` in `utils/camera_stream.py` opens whatever
+  camera is physically attached to that machine.
+- `pyttsx3` (offline TTS) and the voice assistant's microphone
+  (`SpeechRecognition`) need local audio output/input hardware.
+
+Run locally, that machine is your own laptop/PC, so "the camera" and
+"the speakers" correctly mean *your* webcam and speakers. Deployed to a
+cloud server, "that machine" is Render's container - which has no
+webcam, no microphone, and no speakers. The pages will load and the
+UI/API will respond, but **Live Camera, OCR, Navigation, Voice
+Assistant, and all audio narration will not work for anyone visiting
+the deployed URL** - `camera.start()` fails to open a nonexistent
+device, the mic fails to initialize, and TTS has no audio driver to
+speak through. Both failures are handled gracefully (a toast/log
+message, not a crash) but the features are simply unavailable.
+
+This is fine for demoing the UI, the object-detection/OCR/navigation
+*code paths* against your own machine, or the non-hardware endpoints
+(Home, About, SOS, GPS placeholder, Settings) - it is not a way to give
+remote visitors a working camera feed. Making that actually work for
+remote visitors would mean moving camera capture to the browser
+(`getUserMedia()`, frames POSTed to the server for inference) and
+TTS/STT to the browser's Web Speech API - a real frontend rework, not a
+config change.
+
+### Deploying to Render (demo / UI only, per above)
+
+1. Push this repo to GitHub (already done if you're reading this from
+   there).
+2. In Render: **New -> Blueprint**, point it at this repo - it will
+   read `render.yaml` and set everything up automatically. Or configure
+   a **Web Service** manually with:
+   - Build command: `pip install -r requirements-render.txt && python download_weights.py`
+   - Start command: `gunicorn --workers 1 --threads 4 --timeout 120 --bind 0.0.0.0:$PORT app:app`
+   - Env var: `FLASK_DEBUG=0`
+3. `requirements-render.txt` (not `requirements.txt`) is used
+   deliberately - it drops `PyAudio`, which needs system build headers
+   Render's Python buildpack doesn't have and would otherwise fail the
+   *entire* install.
+4. **Memory**: `torch` + `ultralytics` + `easyocr` loaded together can
+   approach or exceed Render's free-tier 512 MB RAM limit, especially
+   once a request actually triggers OCR or detection - if the app gets
+   OOM-killed under load, that's why. A paid tier with more RAM avoids
+   this.
+5. **Cold starts**: the free tier spins down after inactivity; the
+   first request after that will be slow (YOLO/EasyOCR loading, and
+   `download_weights.py` already ran at build time so at least that
+   part is cached).
+6. `pyttsx3` on Linux needs an `espeak`/`espeak-ng` binary to have any
+   voice at all - Render's default Python environment doesn't include
+   one, so speech will no-op (logged, not fatal) even for API calls
+   that don't need a camera.
+
+### Deploying to Vercel
+
+**Not supported for this app**, independent of the hardware issue
+above. Vercel is a serverless-functions platform with per-invocation
+time limits and package-size limits; this app needs a persistent,
+stateful, long-running process (a background detection thread, a live
+MJPEG stream, in-memory state shared across requests) and ships with
+`torch`/`ultralytics`/`easyocr`, which are far too large for a
+serverless function bundle. Use Render (or any host that runs a
+persistent Python process - Railway, Fly.io, a plain VPS, etc.)
+instead.
+
+---
+
 ## ⚠️ Disclaimer
 
 This is an academic prototype built for a final-year engineering

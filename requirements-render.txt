@@ -1,0 +1,38 @@
+# Deployment requirements for cloud hosts (Render, etc.) - a trimmed
+# version of requirements.txt.
+#
+# Excludes PyAudio: it has no prebuilt Linux wheel and needs system
+# build headers (`portaudio19-dev`) that a typical Python buildpack
+# doesn't install, which would fail the *entire* `pip install` and block
+# deployment outright. The app already handles a missing microphone
+# gracefully at runtime (the Voice Assistant page will just report
+# "Microphone unavailable" instead of crashing), so this only disables
+# a feature that has no real hardware to use on a cloud server anyway -
+# see README.md -> "Deployment" for the full explanation of what does
+# and doesn't work when this app is hosted in the cloud rather than run
+# locally.
+
+# Core web backend
+flask>=3.0
+gunicorn>=21.2
+
+# Computer vision / AI
+opencv-python-headless>=4.9
+ultralytics>=8.2
+easyocr>=1.7
+numpy>=1.26
+Pillow>=10.0
+
+# Offline text-to-speech (requires `espeak`/`espeak-ng` on Linux for
+# pyttsx3 to have a driver at all - most cloud hosts won't have it
+# preinstalled either, so speech will similarly no-op gracefully rather
+# than crash; see modules/speaker.py::_run_as_speak_worker)
+pyttsx3>=2.90
+
+# Voice assistant (speech-to-text) - safe to install without PyAudio;
+# only creating an actual sr.Microphone() at runtime needs it, and that
+# failure is already caught and logged, not fatal.
+SpeechRecognition>=3.10
+
+# pycaw is Windows-only (see requirements.txt) and is skipped
+# automatically via its environment marker - no need to list it here.

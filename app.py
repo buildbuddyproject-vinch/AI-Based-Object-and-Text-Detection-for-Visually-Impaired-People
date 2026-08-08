@@ -35,6 +35,10 @@ log = get_logger()
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = config.SECRET_KEY
+# Set explicitly (not just passed to app.run() below) so it also takes
+# effect under a production WSGI server like gunicorn, which imports
+# `app` directly and never calls app.run() at all.
+app.config["DEBUG"] = config.DEBUG
 
 # ---------------------------------------------------------------------------
 # Lazily-created singletons (heavy models load on first use, not at import

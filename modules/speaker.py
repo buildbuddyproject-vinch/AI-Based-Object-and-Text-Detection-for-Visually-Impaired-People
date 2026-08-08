@@ -222,7 +222,17 @@ def _run_as_speak_worker(argv):
     if not text:
         return
 
-    engine = pyttsx3.init()
+    try:
+        engine = pyttsx3.init()
+    except Exception as exc:
+        # No usable TTS driver on this machine - e.g. a cloud host with
+        # no `espeak`/`espeak-ng` installed (pyttsx3's Linux backend) or
+        # no SAPI5 voices (Windows). Fail quietly with a clear message
+        # rather than a raw traceback; the app keeps working visually,
+        # it just can't speak on a box with no audio stack at all.
+        print(f"[tts-worker] no TTS driver available: {exc}", file=sys.stderr)
+        sys.exit(1)
+
     engine.setProperty("rate", rate)
     engine.setProperty("volume", volume)
     if voice_id:

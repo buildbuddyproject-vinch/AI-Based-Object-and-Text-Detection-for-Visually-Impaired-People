@@ -1,8 +1,14 @@
 # Core web backend
 flask>=3.0
+gunicorn>=21.2
 
 # Computer vision / AI
-opencv-python>=4.9
+# opencv-python-headless (not opencv-python): this app never calls
+# cv2.imshow()/GUI functions, and the headless wheel avoids depending on
+# system X11/libGL libraries that a minimal Linux container (e.g. a
+# Render web service) usually doesn't have preinstalled - the regular
+# opencv-python wheel can fail to even *import* there.
+opencv-python-headless>=4.9
 ultralytics>=8.2
 easyocr>=1.7
 numpy>=1.26
@@ -28,3 +34,9 @@ pycaw>=20240111; sys_platform == "win32"
 # - PyAudio has no pure-Python wheel for every Python version on
 #   Windows. If `pip install PyAudio` fails, see README.md ->
 #   "Troubleshooting" for the pipwin / prebuilt-wheel workaround.
+# - Deploying to a cloud host (Render, etc.)? Use requirements-render.txt
+#   instead - it drops PyAudio, which needs system build headers
+#   (`portaudio19-dev`) that a typical cloud Python buildpack doesn't
+#   have, and would otherwise fail the *entire* install. The app already
+#   handles a missing microphone gracefully at runtime either way; see
+#   README.md -> "Deployment".
