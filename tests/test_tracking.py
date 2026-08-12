@@ -97,6 +97,87 @@ class TestObjectTracker(unittest.TestCase):
         self.assertLess(max(raw_cxs) - min(raw_cxs), 25)  # sanity: the jitter is real
         self.assertAlmostEqual(stable_cx, sum(raw_cxs) / len(raw_cxs))
 
+    def test_class_stability_survives_a_wobbling_classification(self):
+        # Reproduces the live-testing bug: the same physical object
+        # (fixed position) alternates between two visually similar
+        # trained classes frame to frame. Position-based (IoU) matching
+        # should keep this as ONE track whose stable_label reflects the
+        # majority-voted class, instead of splitting into two separate
+        # tracks that each independently confirm and then flip-flop.
+        tracker = ObjectTracker(min_confidence=0.4, min_consecutive_frames=1, iou_match_threshold=0.3)
+        labels = ["door", "refrigeratorDoor", "door", "door", "refrigeratorDoor", "door"]
+        confirmed = []
+        for i, label in enumerate(labels):
+            confirmed = tracker.update([{"label": label, "bbox": BOX, "confidence": 0.7}], now=float(i))
+        self.assertEqual(len(confirmed), 1)  # one track, not two
+        self.assertEqual(confirmed[0].stable_label, "door")  # 4 of 6 frames
+
+    def test_class_stability_ties_broken_by_recency(self):
+        tracker = ObjectTracker(min_confidence=0.4, min_consecutive_frames=1, iou_match_threshold=0.3)
+        confirmed = []
+        for i, label in enumerate(["door", "refrigeratorDoor"]):
+            confirmed = tracker.update([{"label": label, "bbox": BOX, "confidence": 0.7}], now=float(i))
+        # 1-1 tie -> most recent wins.
+        self.assertEqual(confirmed[0].stable_label, "refrigeratorDoor")
+
+    def test_single_frame_misclassification_does_not_flip_a_stable_track(self):
+        tracker = ObjectTracker(min_confidence=0.4, min_consecutive_frames=1, iou_match_threshold=0.3)
+        confirmed = []
+        for i, label in enumerate(["chair", "chair", "chair", "table", "chair"]):
+            confirmed = tracker.update([{"label": label, "bbox": BOX, "confidence": 0.7}], now=float(i))
+        self.assertEqual(confirmed[0].stable_label, "chair")  # 4 of 5, the one-off "table" is outvoted
+
+    def test_low_confidence_wobble_still_never_matches_by_iou_alone(self):
+        # A below-floor detection must still never be eligible to match
+        # (and thus never contribute a vote to) any track, regardless of
+        # this change removing the same-label requirement.
+        tracker = ObjectTracker(min_confidence=0.4, min_consecutive_frames=1, iou_match_threshold=0.3)
+        tracker.update([{"label": "door", "bbox": BOX, "confidence": 0.7}], now=0.0)
+        confirmed = tracker.update([{"label": "airplane", "bbox": BOX, "confidence": 0.2}], now=0.1)
+        self.assertEqual(confirmed[0].stable_label, "door")  # unaffected by the low-confidence "airplane"
+
+    def test_stable_zone_smooths_a_boundary_straddling_object(self):
+        # Same jittery sequence as the stable_bbox boundary test, but
+        # voting on the discrete zone decision itself. thirds of a
+        # 300-wide frame: left [0,100) center [100,200) right [200,300).
+        def zone_of(bbox):
+            cx = (bbox[0] + bbox[2]) / 2
+            if cx < 100:
+                return "left"
+            if cx > 200:
+                return "right"
+            return "center"
+
+        tracker = ObjectTracker(min_confidence=0.4, min_consecutive_frames=1, iou_match_threshold=0.1)
+        # Center-x hovers right around the left/center boundary (100):
+        # 95(left), 105(center), 103(center), 107(center), 99(left) ->
+        # 3 center, 2 left - center wins even though the raw sequence
+        # starts and ends on "left".
+        boxes = [
+            [90, 0, 100, 10], [100, 0, 110, 10], [98, 0, 108, 10],
+            [102, 0, 112, 10], [94, 0, 104, 10],
+        ]
+        confirmed = []
+        for i, box in enumerate(boxes):
+            confirmed = tracker.update([{"label": "door", "bbox": box, "confidence": 0.8}], now=float(i))
+        track = confirmed[0]
+        self.assertEqual(track.stable_zone(zone_of), "center")  # majority of the 5 frames
+
+    def test_stable_zone_ties_broken_by_recency(self):
+        def zone_of(bbox):
+            return "left" if bbox[0] < 50 else "right"
+
+        # Overlapping boxes (so IoU matching keeps this as ONE track)
+        # whose left edge straddles the zone_of boundary (50).
+        tracker = ObjectTracker(min_confidence=0.4, min_consecutive_frames=1, iou_match_threshold=0.3)
+        confirmed = []
+        for i, x in enumerate([10, 60]):
+            confirmed = tracker.update(
+                [{"label": "door", "bbox": [x, 0, x + 100, 50], "confidence": 0.8}], now=float(i)
+            )
+        self.assertEqual(len(confirmed), 1)  # sanity: stayed one track, not two
+        self.assertEqual(confirmed[0].stable_zone(zone_of), "right")  # 1-1 tie -> most recent
+
     def test_stable_bbox_only_uses_last_five_frames(self):
         tracker = ObjectTracker(min_confidence=0.4, min_consecutive_frames=1, iou_match_threshold=0.1)
         confirmed = tracker.update([{"label": "chair", "bbox": [0, 0, 100, 100], "confidence": 0.8}], now=0.0)

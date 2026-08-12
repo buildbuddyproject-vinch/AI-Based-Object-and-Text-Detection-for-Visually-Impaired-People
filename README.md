@@ -840,6 +840,28 @@ old clients for backward compatibility, but is silently treated as
 | The trained `models/footpath/best.pt` existed but was never actually called anywhere in the live pipeline - a real trained model sitting unused. | Wired into `auto`/`navigation` modes: runs alongside the domain detector, computes per-zone walkability, and feeds a `blocks_path` signal into the priority engine (only trusted when footpath confirmed walkable ground exists *somewhere* in frame, so "nothing walkable anywhere" - the normal indoor case, where footpath doesn't apply - is never misread as "the path is blocked"). |
 | `currency`/`OCR` were already on-demand only (not continuous per-frame), and currency already reported "not recognized" honestly on a miss - both already matched Sections 11/12's intent without changes. Phrasing was tightened to the exact requested wording ("Currency not recognized clearly.", "`<denomination>` rupees."). | Phrasing fix only; no architecture change was needed here. |
 
+### Follow-up fix: class stability (root cause of the door/refrigeratorDoor flip)
+
+A closer look at the zone-flicker finding above revealed it was really
+**two** separate problems. Re-watching the live logs after the
+zone-smoothing fix showed the SAME physical object still alternating
+between `"Door ahead."` and `"Refrigeratordoor ahead."` - a different
+bug: `ObjectTracker` required an exact label match to keep matching a
+detection to an existing track, so when the model's classification
+wobbled between two visually similar classes for the same object, it
+split into **two separate tracks** (one per label) that each
+independently reached confirmation and then flip-flopped which one
+`select_most_relevant()` picked. Fixed by matching tracks by position
+(IoU) alone, with `TrackedObject.stable_label` now reporting a
+majority vote of the label across recent frames rather than whichever
+the single latest frame said. Live-verified: the same object that
+previously alternated `Door`/`Refrigeratordoor` every few seconds now
+consistently announces one label. A second, complementary fix
+(`TrackedObject.stable_zone`, a majority vote of the zone itself,
+alongside the existing `stable_bbox` position average) further reduces
+zone flicker for a genuinely stationary object - see Remaining Work
+for what's left.
+
 ### UI redesign: User Mode vs. Developer Mode
 
 The Home page (`/`) is now the literal thing Section 8 asked for -
@@ -983,25 +1005,39 @@ requirement stops it from being mis-announced as something else
    minimum) will likely have weak per-class accuracy - check
    `runs/household/train/confusion_matrix.png` once trained before
    trusting them individually.
-10. **Residual zone-boundary flicker** - `stable_bbox`'s 5-frame rolling
-    average (see Audit & Redesign Findings) measurably reduces but does
-    not fully eliminate an object's announced zone changing when its
-    true position sits right at a left/center or center/right boundary.
-    A hysteresis-based zone state machine (require N consecutive frames
-    in the *new* zone before treating it as a real transition, not just
-    a smoothed average crossing the line) would fix this more
-    completely, at the cost of slightly slower reporting of genuine
-    movement - a real safety/annoyance tradeoff worth deciding
-    deliberately rather than defaulting silently.
+10. **Residual zone flicker for a genuinely-moving camera/object** -
+    `TrackedObject` now smooths position two ways: `stable_bbox` (a
+    5-frame rolling mean, for size/distance) and `stable_zone` (a
+    majority vote of the per-frame zone across those same 5 frames, for
+    left/center/right specifically). Both were live-verified to fix the
+    original bug (a *stationary* object's zone no longer flickers from
+    ordinary per-frame jitter). What can still change the announced
+    zone every few seconds is the camera or object actually moving
+    enough, within that ~5-frame window, to genuinely cross a boundary
+    - which is correct behavior to report, not a bug, but is hard to
+    tell apart from residual jitter without knowing the real scene. A
+    hysteresis-based zone state machine (require the *new* zone to win
+    N consecutive votes before switching, rather than a single 5-frame
+    window's majority) would further separate "real movement" from
+    "still jittery," at the cost of slightly slower reporting of
+    genuine movement - a safety/responsiveness tradeoff worth deciding
+    deliberately with real-world testing across a full range of motion,
+    not something to keep tuning blind.
 11. **Class confusion between visually similar trained classes** (e.g.
     indoor's `door` vs `cabinetDoor`/`refrigeratorDoor` for the same
-    physical object) was observed during live audit testing - each
-    individual detection clears its confidence threshold, so the
-    tracker correctly confirms both as separate tracks, but the result
-    can alternate which label gets spoken. This is a genuine model
-    discriminability limit at the current training budget (consistent
-    with indoor's measured 0.456 mAP50), not a pipeline bug - more
-    training data distinguishing these classes is the real fix.
+    physical object) was observed during live audit testing and has
+    since been fixed at the tracking layer: `ObjectTracker` now matches
+    a track to new detections by position (IoU) alone rather than
+    requiring an exact label match, and `TrackedObject.stable_label`
+    reports the majority-voted class across recent frames instead of
+    whatever the single latest frame said. Live-verified: the same
+    physical object that previously alternated between "Door ahead."
+    and "Refrigeratordoor ahead." now consistently announces one label.
+    This masks, but doesn't fix, the underlying cause - the two classes
+    are still genuinely hard for the model to tell apart at indoor's
+    current training budget (0.456 mAP50) - more training data
+    distinguishing `door`/`cabinetDoor`/`refrigeratorDoor` remains the
+    real fix for the model itself, not just the symptom.
 
 ---
 

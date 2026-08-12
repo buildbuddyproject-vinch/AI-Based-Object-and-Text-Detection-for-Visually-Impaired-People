@@ -50,12 +50,25 @@ class TrackedObject:
         # live testing - confusing and useless for navigation, even
         # though each individual detection was itself correct.
         self._recent_bboxes = [bbox]
+        # Recent raw labels, oldest first - backs stable_label below.
+        # Class stability: a track is now matched to new detections by
+        # POSITION (IoU) alone, not by requiring an exact label match -
+        # see ObjectTracker.update(). That's what lets a physical
+        # object's identity persist even when the detector's
+        # classification wobbles between two visually similar trained
+        # classes (e.g. "door" vs "refrigeratorDoor" for the same
+        # surface, observed during live testing) instead of splitting
+        # into two separate, competing tracks that each independently
+        # reach confirmation and then flip-flop which one gets spoken.
+        self._recent_labels = [label]
 
-    def update(self, bbox, confidence, now):
+    def update(self, label, bbox, confidence, now):
+        self.label = label
         self.bbox = bbox
         self.confidence = confidence
         self._confidences = (self._confidences + [confidence])[-10:]
         self._recent_bboxes = (self._recent_bboxes + [bbox])[-5:]
+        self._recent_labels = (self._recent_labels + [label])[-7:]
         self.last_seen = now
         self.consecutive_frames += 1
 
@@ -78,6 +91,49 @@ class TrackedObject:
         n = len(self._recent_bboxes)
         return tuple(sum(b[i] for b in self._recent_bboxes) / n for i in range(4))
 
+    def stable_zone(self, zone_fn):
+        """Majority-vote result of `zone_fn(bbox)` (e.g. a left/center/
+        right zone classifier) across recent frames, ties broken by
+        recency. `stable_bbox`'s rolling average already reduces
+        frame-to-frame position jitter, but an object sitting right at
+        a zone boundary can still have its *averaged* center cross the
+        line periodically; voting on the already-discrete zone decision
+        itself (computed per recent frame) is a second, more direct
+        layer of stability for exactly that boundary-adjacent case -
+        same rationale as stable_label, applied to position instead of
+        class."""
+        zones = [zone_fn(b) for b in self._recent_bboxes]
+        counts = {}
+        for z in zones:
+            counts[z] = counts.get(z, 0) + 1
+        best_count = max(counts.values())
+        tied = [z for z, c in counts.items() if c == best_count]
+        if len(tied) == 1:
+            return tied[0]
+        for z in reversed(zones):
+            if z in tied:
+                return z
+        return zones[-1]
+
+    @property
+    def stable_label(self):
+        """Majority-vote label across recent frames, ties broken by
+        recency - use this (not the raw `label`) for anything spoken to
+        the user, so a track's identity doesn't flicker between two
+        classes the model occasionally confuses for the same physical
+        object."""
+        counts = {}
+        for lbl in self._recent_labels:
+            counts[lbl] = counts.get(lbl, 0) + 1
+        best_count = max(counts.values())
+        tied = [lbl for lbl, c in counts.items() if c == best_count]
+        if len(tied) == 1:
+            return tied[0]
+        for lbl in reversed(self._recent_labels):
+            if lbl in tied:
+                return lbl
+        return self.label
+
 
 class ObjectTracker:
     """Matches each frame's raw detections against recently-seen
@@ -97,6 +153,15 @@ class ObjectTracker:
         Frame 4: (nothing)     -> airplane track still unmatched
         -> airplane track never reaches min_consecutive_frames and is
            never announced.
+
+    Matching is by POSITION (IoU) only, not by requiring an exact label
+    match - a track's label is instead the majority vote across its
+    recent frames (TrackedObject.stable_label). This is what "class
+    stability" means in practice: the SAME physical object staying
+    matched to one track even if the model's classification wobbles
+    between two similar classes frame to frame, so the announced label
+    is whichever one actually won out recently, not just whichever the
+    single latest frame happened to say.
     """
 
     def __init__(self, min_confidence=0.4, min_consecutive_frames=4,
@@ -120,13 +185,19 @@ class ObjectTracker:
         for track in self._tracks:
             best_match, best_iou = None, 0.0
             for det in unmatched:
-                if det["label"] != track.label or det["confidence"] < self.min_confidence:
+                # Matched by position (IoU) alone, not label - see
+                # TrackedObject's stable_label for why: this lets a
+                # track's identity survive the detector's classification
+                # wobbling between two similar classes for the same
+                # physical object, instead of splitting into separate,
+                # independently-confirmed, flip-flopping tracks.
+                if det["confidence"] < self.min_confidence:
                     continue
                 iou = _iou(det["bbox"], track.bbox)
                 if iou > best_iou:
                     best_iou, best_match = iou, det
             if best_match is not None and best_iou >= self.iou_match_threshold:
-                track.update(best_match["bbox"], best_match["confidence"], now)
+                track.update(best_match["label"], best_match["bbox"], best_match["confidence"], now)
                 unmatched.remove(best_match)
 
         # Leftover detections that clear the confidence floor start new

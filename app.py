@@ -468,9 +468,14 @@ def _detection_loop():
                     # hasn't actually moved (confirmed during live
                     # testing - see modules/tracking.py).
                     x1, y1, x2, y2 = track.stable_bbox
-                    cx = (x1 + x2) / 2
                     area_ratio = max(0, x2 - x1) * max(0, y2 - y1) / max(1, w * h)
-                    zone = navigator._zone(cx, w)
+                    # stable_zone: majority-vote zone across recent
+                    # frames, not just the averaged position - a second,
+                    # more direct layer of stability for an object
+                    # sitting right at a boundary, where even the
+                    # averaged center can still cross the line
+                    # periodically (confirmed during live testing).
+                    zone = track.stable_zone(lambda b: navigator._zone((b[0] + b[2]) / 2, w))
                     is_very_close = area_ratio >= pipeline_settings["navigation"]["very_near_threshold"]
                     # Only trust footpath's "not walkable here" as a real
                     # obstruction signal if it also confirmed walkable
@@ -480,7 +485,14 @@ def _detection_loop():
                     # indoors), not that the path is blocked.
                     blocks_path = bool(footpath_zones) and not footpath_zones.get(zone, True)
                     candidates.append({
-                        "label": track.label, "zone": zone, "area_ratio": area_ratio,
+                        # stable_label (majority vote across recent
+                        # frames), not the single latest frame's label -
+                        # otherwise the same physical object flips which
+                        # class gets announced whenever the model
+                        # briefly confuses it with a visually similar
+                        # trained class (e.g. "door" vs
+                        # "refrigeratorDoor" for the same surface).
+                        "label": track.stable_label, "zone": zone, "area_ratio": area_ratio,
                         "is_very_close": is_very_close, "blocks_path": blocks_path,
                     })
                 primary = select_most_relevant(candidates)
