@@ -141,14 +141,15 @@ _last_gesture_time = 0.0
 # said - lets the spoken-feedback block tell "this is new information"
 # apart from "the same static obstacle is still there", so a stationary
 # object doesn't get re-announced on every announcer.cooldown_seconds
-# (Section 10: "if nothing changes, do not repeat" - a short cooldown
-# alone only limits repeat *rate*, not repetition itself).
+# (Section 10: "Person ahead. Then silence. If nothing changes, do not
+# repeat." - a short cooldown alone only limits repeat *rate*, not
+# repetition itself).
 _last_situation_key = None
-# Repeat interval for an *unchanged* situation - deliberately much
-# longer than announcer.cooldown_seconds (which governs how fast a
-# genuinely NEW situation can interrupt); CRITICAL gets a shorter
-# repeat since an ongoing hazard is worth the occasional reminder.
-SAME_SITUATION_REPEAT_SECONDS = {"CRITICAL": 12.0, "HIGH": 20.0, "MEDIUM": 30.0, "LOW": 30.0}
+# An UNCHANGED CRITICAL situation still gets an occasional reminder
+# (an ongoing close/blocking hazard is worth repeating); every other
+# tier goes fully silent about an unchanged situation, per Section 10's
+# own example above - see the spoken-feedback block in _detection_loop().
+CRITICAL_REPEAT_SECONDS = 15.0
 _last_low_light_check = 0.0
 _last_low_light_warning = 0.0
 _low_light_session_active = False  # True while the scene has stayed dark
@@ -510,25 +511,41 @@ def _detection_loop():
                         label_text, primary["zone"], is_close=primary["is_very_close"],
                         tier=tier, blocked=primary["blocks_path"],
                     )
-                    # Section 10: "if nothing changes, do not repeat" - a
-                    # short cooldown alone only limits repeat *rate*, not
-                    # repetition itself, which is exactly what let a
-                    # stationary "very close" door get re-announced every
-                    # ~6s indefinitely during live testing. A genuinely
-                    # NEW situation (different label/zone/tier) still
-                    # gets announced right away; an UNCHANGED one falls
-                    # back to a much longer, tier-scaled repeat interval.
+                    # Section 10: "Person ahead. Then silence. If
+                    # nothing changes, do not repeat." - taken literally.
+                    # A short per-key cooldown alone only limits repeat
+                    # *rate*, not repetition itself, which is exactly
+                    # what let a stationary "very close" door get
+                    # re-announced every ~6s indefinitely during live
+                    # testing. A genuinely NEW situation (different
+                    # label/zone/tier) still announces right away; an
+                    # UNCHANGED one goes fully silent (except CRITICAL,
+                    # which still gets an occasional reminder - see below).
                     situation_key = (mode, primary["label"], primary["zone"], tier)
                     is_new_situation = situation_key != _last_situation_key
-                    # force=True for a genuinely new situation bypasses
-                    # the announcer's own per-key cooldown outright (that
-                    # cooldown is keyed by label only, not zone/tier, so
-                    # without this a door moving from "ahead" to "left"
-                    # within 6s of the last announcement would otherwise
-                    # still be suppressed as if it were a plain repeat).
-                    if announcer.announce(text, key=f"{mode}:{primary['label']}", tier=tier,
-                                           force=is_new_situation,
-                                           cooldown=SAME_SITUATION_REPEAT_SECONDS.get(tier, 30.0)):
+                    if is_new_situation:
+                        # force=True bypasses the announcer's own
+                        # per-key cooldown outright (that cooldown is
+                        # keyed by label only, not zone/tier, so without
+                        # this a door moving from "ahead" to "left"
+                        # within 6s of the last announcement would
+                        # otherwise still be suppressed as a plain
+                        # repeat).
+                        spoke = announcer.announce(text, key=f"{mode}:{primary['label']}", tier=tier, force=True)
+                    elif tier == "CRITICAL":
+                        # Section 10's own example ("Person ahead. Then
+                        # silence. If nothing changes, do not repeat.")
+                        # is taken literally below for everything except
+                        # CRITICAL - an ongoing close/blocking hazard is
+                        # the one case still worth an occasional
+                        # reminder while genuinely unchanged.
+                        spoke = announcer.announce(text, key=f"{mode}:{primary['label']}", tier=tier,
+                                                    cooldown=CRITICAL_REPEAT_SECONDS)
+                    else:
+                        # Already announced this exact situation once;
+                        # say nothing more about it until it changes.
+                        spoke = False
+                    if spoke:
                         _last_situation_key = situation_key
                         state.last_auto_announcement = text
                         event_log.record("auto_announcement", text=text, tier=tier,
