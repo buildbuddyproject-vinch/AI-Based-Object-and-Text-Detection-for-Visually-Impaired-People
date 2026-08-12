@@ -40,11 +40,22 @@ class TrackedObject:
         self.last_seen = now
         self.consecutive_frames = 1
         self._confidences = [confidence]
+        # Recent raw bboxes, oldest first - backs stable_bbox below.
+        # Position stability matters as much as confidence stability for
+        # an assistive system: a real object's detection box jitters
+        # frame to frame even when confirmed, and using only the latest
+        # frame's box to decide "which zone is this in" made a
+        # perfectly stable, stationary object flicker between "on your
+        # left" / "ahead" / "on your right" every few seconds during
+        # live testing - confusing and useless for navigation, even
+        # though each individual detection was itself correct.
+        self._recent_bboxes = [bbox]
 
     def update(self, bbox, confidence, now):
         self.bbox = bbox
         self.confidence = confidence
         self._confidences = (self._confidences + [confidence])[-10:]
+        self._recent_bboxes = (self._recent_bboxes + [bbox])[-5:]
         self.last_seen = now
         self.consecutive_frames += 1
 
@@ -56,6 +67,16 @@ class TrackedObject:
     def center(self):
         x1, y1, x2, y2 = self.bbox
         return ((x1 + x2) / 2, (y1 + y2) / 2)
+
+    @property
+    def stable_bbox(self):
+        """Mean of the last few frames' boxes - smooths out the kind of
+        frame-to-frame jitter that would otherwise flip which zone
+        (left/center/right) a stationary object is reported in. Use
+        this for zone/navigation decisions; use the raw `bbox` when you
+        specifically want this frame's latest reading."""
+        n = len(self._recent_bboxes)
+        return tuple(sum(b[i] for b in self._recent_bboxes) / n for i in range(4))
 
 
 class ObjectTracker:

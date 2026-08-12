@@ -110,6 +110,15 @@ a { color: var(--color-primary); }
   background: var(--color-surface-alt);
   color: var(--color-primary);
 }
+.nav-group-label {
+  align-self: center;
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0 4px;
+  opacity: 0.75;
+}
 .header-actions { display: flex; gap: 10px; align-items: center; }
 .icon-btn {
   background: var(--color-surface-alt);
@@ -214,6 +223,21 @@ a { color: var(--color-primary); }
 .page-header { max-width: 1200px; margin: 30px auto 10px; padding: 0 24px; }
 .page-header h1 { color: var(--color-primary); margin-bottom: 4px; }
 .page-header p { color: var(--color-text-muted); margin-top: 0; }
+.page-header p a { color: var(--color-primary); }
+.devmode-tag {
+  display: inline-block;
+  vertical-align: middle;
+  margin-left: 10px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
 
 .panel-grid {
   max-width: 1200px;
@@ -451,6 +475,78 @@ a { color: var(--color-primary); }
   font-size: 0.9rem;
   word-break: break-word;
 }
+
+/* ---------- User Mode home page (Section 8) -------------------------
+   Deliberately minimal - a status readout, not a dashboard full of
+   buttons. Nothing on this page needs to be clicked; the assistant is
+   already running by the time it loads. */
+.user-mode {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 32px 20px 56px;
+  text-align: center;
+}
+.user-mode-heading {
+  font-size: clamp(1.8rem, 5vw, 2.6rem);
+  color: var(--color-primary);
+  margin-bottom: 28px;
+  letter-spacing: 0.02em;
+}
+.user-mode-status {
+  display: flex;
+  justify-content: center;
+  gap: 28px;
+  flex-wrap: wrap;
+  margin: 0 0 32px;
+}
+.user-mode-row {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 14px 22px;
+  min-width: 120px;
+}
+.user-mode-row dt {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+  margin-bottom: 4px;
+}
+.user-mode-row dd {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+.user-mode-card {
+  background: var(--color-surface-alt);
+  border-radius: 14px;
+  padding: 20px 24px;
+  margin-bottom: 20px;
+  text-align: left;
+}
+.user-mode-card h2 {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+  margin-bottom: 8px;
+}
+.user-mode-card p {
+  font-size: 1.2rem;
+  margin: 0;
+}
+.user-mode-hint {
+  color: var(--color-text-muted);
+  font-size: 0.95rem;
+  line-height: 1.6;
+  margin: 28px 0 12px;
+}
+.user-mode-devlink {
+  margin-top: 20px;
+  font-size: 0.9rem;
+}
+.user-mode-devlink a { color: var(--color-text-muted); }
 
 /* ---------- Responsive ---------- */
 @media (max-width: 860px) {

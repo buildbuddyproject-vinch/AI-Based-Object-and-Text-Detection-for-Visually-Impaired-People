@@ -83,6 +83,11 @@ class AppState:
         self.gesture_active = False
         self.last_gesture = None
 
+        # True only while a synchronous capture (OCR, currency) is
+        # actively running - backs the User Mode status page's
+        # Listening/Processing/Speaking indicator (Section 8).
+        self.processing = False
+
     def update_detections(self, detections, fps):
         with self.lock:
             self.detections = detections

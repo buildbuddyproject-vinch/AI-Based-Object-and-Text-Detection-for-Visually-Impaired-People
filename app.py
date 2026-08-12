@@ -26,7 +26,7 @@ from utils.event_log import event_log
 from modules.object_detector import ObjectDetector
 from modules.ocr_reader import OCRReader, find_important_keyword
 from modules.speaker import Speaker
-from modules.navigation import NavigationAssistant
+from modules.navigation import NavigationAssistant, footpath_walkability
 from modules.voice_commands import VoiceCommandListener
 from modules.color_detector import detect_dominant_color
 from modules.currency_detector import CurrencyDetector
@@ -100,51 +100,69 @@ announcer = AnnouncementManager(
 # commands can still switch state.mode away from "auto" at any time.
 AUTO_DOMAIN_PRIORITY = ["indoor", "household", "outdoor"]
 
+# Wire config/config.yaml's confidence thresholds into the router - this
+# was previously silently unused (the router's set_domain_confidence()
+# was never actually called), so every domain ran at the ObjectDetector
+# default (0.45) no matter what config.yaml said. `hazard` in the yaml
+# maps to the router's `road_hazards` domain key.
+_confidence_cfg = dict(pipeline_settings.get("confidence", {}))
+if "hazard" in _confidence_cfg:
+    _confidence_cfg["road_hazards"] = _confidence_cfg.pop("hazard")
+model_router.set_domain_confidence(_confidence_cfg)
+
+
+# Set by "indoor mode"/"outdoor mode" (voice or dashboard) to pin
+# auto-assistance to one domain instead of AUTO_DOMAIN_PRIORITY's
+# automatic pick; cleared by "automatic mode". None = automatic.
+_manual_domain_override = None
+
 
 def refresh_model_status():
     """Recompute which domain models are available and pick the active
     one for auto-assistance mode. Safe to call again later if models
     get trained/placed while the app is running."""
     state.model_status = model_router.status_report()
-    state.active_domain = next(
-        (d for d in AUTO_DOMAIN_PRIORITY if model_router.is_available(d)), None
-    )
+    if _manual_domain_override and model_router.is_available(_manual_domain_override):
+        state.active_domain = _manual_domain_override
+    else:
+        state.active_domain = next(
+            (d for d in AUTO_DOMAIN_PRIORITY if model_router.is_available(d)), None
+        )
     return state.active_domain
 
 
 refresh_model_status()
 
 _detection_thread = None
-_previous_labels = set()
-_last_nav_instruction = None
-_pending_nav_instruction = None
-_pending_nav_since = 0.0
-NAV_DEBOUNCE_SECONDS = 0.6  # ignore instruction flicker shorter than this
 
 _cached_depth_map = None
 _last_gesture_time = 0.0
+# (mode, label, zone, tier) of the last thing auto-assistance actually
+# said - lets the spoken-feedback block tell "this is new information"
+# apart from "the same static obstacle is still there", so a stationary
+# object doesn't get re-announced on every announcer.cooldown_seconds
+# (Section 10: "if nothing changes, do not repeat" - a short cooldown
+# alone only limits repeat *rate*, not repetition itself).
+_last_situation_key = None
+# Repeat interval for an *unchanged* situation - deliberately much
+# longer than announcer.cooldown_seconds (which governs how fast a
+# genuinely NEW situation can interrupt); CRITICAL gets a shorter
+# repeat since an ongoing hazard is worth the occasional reminder.
+SAME_SITUATION_REPEAT_SECONDS = {"CRITICAL": 12.0, "HIGH": 20.0, "MEDIUM": 30.0, "LOW": 30.0}
 _last_low_light_check = 0.0
 _last_low_light_warning = 0.0
+_low_light_session_active = False  # True while the scene has stayed dark
+                                    # since the last warning/light-return
 
 _frame_lock = threading.Lock()
 _annotated_frame = None
 
-
-def get_detector():
-    global detector
-    if detector is None:
-        if not os.path.exists(config.YOLO_WEIGHTS_PATH):
-            log.warning(
-                "YOLO weights not found at %s - attempting to auto-download "
-                "yolov8n.pt (see README.md for manual instructions).",
-                config.YOLO_WEIGHTS_PATH,
-            )
-        detector = ObjectDetector(
-            model_path=config.YOLO_WEIGHTS_PATH,
-            conf_threshold=config.YOLO_CONFIDENCE,
-            device=config.YOLO_DEVICE,
-        )
-    return detector
+# NOTE: there is deliberately no get_detector()/generic-COCO helper here
+# any more. Every live detection path goes through modules/model_router.py,
+# which only ever uses a domain's real trained model and reports honestly
+# ("Detection model unavailable.") when one isn't trained yet - see the
+# audit notes in README.md's Final Status Report for why the old
+# COCO-backed "object" mode was removed rather than kept as a fallback.
 
 
 def get_ocr_reader():
@@ -216,8 +234,8 @@ def get_gesture_recognizer():
 # Camera / detection lifecycle
 # ---------------------------------------------------------------------------
 def start_camera():
-    global camera, _detection_thread, _previous_labels
-    global _last_nav_instruction, _pending_nav_instruction, _pending_nav_since
+    global camera, _detection_thread
+    global _low_light_session_active
 
     if camera is None or not camera.is_opened:
         camera = VideoCamera(
@@ -228,10 +246,7 @@ def start_camera():
             return False
 
     state.camera_active = True
-    _previous_labels = set()
-    _last_nav_instruction = None
-    _pending_nav_instruction = None
-    _pending_nav_since = 0.0
+    _low_light_session_active = False
     object_tracker.reset()
     announcer.reset()
 
@@ -254,10 +269,9 @@ def _detection_loop():
     """Continuously grab frames, run inference, update shared state and
     trigger spoken feedback. Runs on its own daemon thread while the
     camera is active."""
-    global _previous_labels, _annotated_frame
-    global _last_nav_instruction, _pending_nav_instruction, _pending_nav_since
+    global _annotated_frame, _last_situation_key
     global _cached_depth_map, _last_gesture_time
-    global _last_low_light_check, _last_low_light_warning
+    global _last_low_light_check, _last_low_light_warning, _low_light_session_active
 
     fps_tracker = FPSTracker()
     frame_count = 0
@@ -277,58 +291,58 @@ def _detection_loop():
         mode = state.mode
         now = time.time()
 
-        if mode == "auto":
-            # Auto-assistance: only ever uses a domain-specific custom
-            # model via model_router - never the generic COCO detector
-            # (Section 9/43). If no custom model is available yet,
-            # detections simply stay empty rather than silently
-            # substituting something misleading.
+        active_domain = state.active_domain
+
+        if mode in ("auto", "navigation", "color"):
+            # Every live detection path routes through model_router -
+            # the generic COCO model is never used here (Section 3/9/43).
+            # "object" mode was removed as a separate mode: it was the
+            # one remaining place COCO still ran, gated only by a weak
+            # "was this label present last frame" dedup with no
+            # confidence/position stability check at all - exactly the
+            # gap that let a one-frame "fan" misread as "airplane" (a
+            # real, well-documented COCO false positive - COCO has no
+            # "fan" class, and its "airplane" class does occasionally
+            # trigger on blurred spinning-blade shapes) reach the user
+            # instead of being filtered out by temporal confirmation.
             detections = []
-            active_domain = state.active_domain
             if active_domain:
-                auto_detector = model_router.get_detector(active_domain)
-                if auto_detector is not None:
+                domain_detector = model_router.get_detector(active_domain)
+                if domain_detector is not None:
                     try:
-                        detections = auto_detector.detect(proc_frame)
+                        detections = domain_detector.detect(proc_frame)
                     except Exception as exc:
-                        log.error("Auto-assistance detection error (%s): %s", active_domain, exc)
+                        log.error("Detection error (%s): %s", active_domain, exc)
                         detections = []
                 else:
                     # The model just failed to load - re-scan so
-                    # active_domain/model_status reflect reality
-                    # instead of retrying every single frame.
+                    # active_domain/model_status reflect reality instead
+                    # of retrying every single frame.
                     refresh_model_status()
-            annotated = ObjectDetector.draw_boxes(proc_frame.copy(), detections)
-        else:
-            try:
-                detections = get_detector().detect(proc_frame)
-            except Exception as exc:
-                log.error("Detection error: %s", exc)
-                detections = []
-
             if mode == "color":
                 for det in detections:
                     det["color"] = detect_dominant_color(proc_frame, det["bbox"])
-            elif mode == "qr":
-                try:
-                    qr_results = get_qr_reader().read(proc_frame)
-                except Exception as exc:
-                    log.error("QR read error: %s", exc)
-                    qr_results = []
-                state.last_qr = qr_results
-                for qr in qr_results:
-                    speaker.speak(f"QR code found: {qr['data']}", dedup_key=f"qr:{qr['data']}")
-                    event_log.record("qr_detected", data=qr["data"])
-
-            annotated = get_detector().draw_boxes(proc_frame.copy(), detections)
+            annotated = ObjectDetector.draw_boxes(proc_frame.copy(), detections)
+        else:  # mode == "qr" - independent of the object detector entirely
+            detections = []
+            try:
+                qr_results = get_qr_reader().read(proc_frame)
+            except Exception as exc:
+                log.error("QR read error: %s", exc)
+                qr_results = []
+            state.last_qr = qr_results
+            for qr in qr_results:
+                speaker.speak(f"QR code found: {qr['data']}", dedup_key=f"qr:{qr['data']}")
+                event_log.record("qr_detected", data=qr["data"])
+            annotated = proc_frame.copy()
 
         h, w = proc_frame.shape[:2]
 
-        # --- Monocular depth estimation (navigation mode only, ------------
-        # throttled to every DEPTH_FRAME_INTERVAL frames - MiDaS is fast
-        # (~0.1-0.2s on CPU) but still not free enough to run every frame).
+        # --- Monocular depth estimation (auto + navigation, throttled to --
+        # every DEPTH_FRAME_INTERVAL frames - MiDaS is fast (~0.1-0.2s on
+        # CPU) but still not free enough to run every frame).
         depth_map = None
-        if mode == "navigation" and config.ENABLE_DEPTH_ESTIMATION:
+        if mode in ("auto", "navigation") and config.ENABLE_DEPTH_ESTIMATION:
             if _cached_depth_map is None or frame_count % config.DEPTH_FRAME_INTERVAL == 0:
                 estimator = get_depth_estimator()
                 if estimator is not None:
@@ -338,10 +352,31 @@ def _detection_loop():
                         log.error("Depth estimation error: %s", exc)
             depth_map = _cached_depth_map
 
+        # --- Footpath walkability (supplementary signal, Section 6/13) ----
+        # Only tried when a trained footpath model actually exists; cheap
+        # single-class detector, run alongside the domain detector rather
+        # than instead of it. footpath_zones stays None (not "all False")
+        # when the model isn't available or hasn't confirmed any walkable
+        # region in this frame, so downstream code can tell "no signal"
+        # apart from "signal says nothing's walkable" - important since
+        # indoors, footpath legitimately detects nothing everywhere, and
+        # that must never be misread as "the path is blocked".
+        footpath_zones = None
+        if mode in ("auto", "navigation") and model_router.is_available("footpath"):
+            footpath_detector = model_router.get_detector("footpath")
+            if footpath_detector is not None:
+                try:
+                    footpath_dets = footpath_detector.detect(proc_frame)
+                    zones = footpath_walkability(footpath_dets, w)
+                    if any(zones.values()):
+                        footpath_zones = zones
+                except Exception as exc:
+                    log.error("Footpath detection error: %s", exc)
+
         # --- Navigation guidance + zone map --------------------------------
         # Computed every frame regardless of mode (cheap, no model) so
-        # scene summaries and "where is my X" work no matter what mode
-        # is active; only *spoken* when mode == "navigation" below.
+        # scene summaries, "where is my X", and the Navigation page's
+        # Left/Center/Right panel work no matter what mode is active.
         instruction, zone_map = navigator.analyze(detections, w, h, depth_map=depth_map)
         state.update_navigation(instruction, zone_map)
 
@@ -368,12 +403,23 @@ def _detection_loop():
                 event_log.record("possible_fall_detected")
 
         # --- Low-light warning (cheap heuristic, time-gated) ----------------
+        # Speaks once when the scene *becomes* dark, then stays quiet
+        # about it - repeating the same "it's dark" fact every couple of
+        # seconds for as long as it stays dark is exactly the kind of
+        # non-repetitive-speech violation Section 10 rules out. Only a
+        # long-session reminder (LOW_LIGHT_REMINDER_INTERVAL) or the
+        # light actually returning resets it.
         if now - _last_low_light_check >= config.LOW_LIGHT_CHECK_INTERVAL:
             _last_low_light_check = now
-            if (is_low_light(proc_frame, threshold=config.LOW_LIGHT_THRESHOLD)
-                    and now - _last_low_light_warning >= config.LOW_LIGHT_WARNING_COOLDOWN):
-                _last_low_light_warning = now
-                speaker.speak("Low light detected. Detection accuracy may be reduced.", force=True)
+            dark_now = is_low_light(proc_frame, threshold=config.LOW_LIGHT_THRESHOLD)
+            if dark_now:
+                if (not _low_light_session_active
+                        or now - _last_low_light_warning >= config.LOW_LIGHT_REMINDER_INTERVAL):
+                    _last_low_light_warning = now
+                    _low_light_session_active = True
+                    speaker.speak("Low light detected. Detection accuracy may be reduced.", force=True)
+            else:
+                _low_light_session_active = False
 
         # --- Hand gesture recognition (optional, throttled) ------------------
         if state.gesture_active and frame_count % config.GESTURE_FRAME_INTERVAL == 0:
@@ -394,70 +440,111 @@ def _detection_loop():
                         handler()
 
         # --- Spoken feedback -------------------------------------------------
-        if mode == "auto":
-            # Temporal confirmation -> priority engine -> announcement
-            # manager (Sections 12/25/26). A detection only becomes
-            # eligible for speech after appearing consistently for
-            # several consecutive frames, and even then only the single
-            # most relevant one gets spoken - never every detection,
-            # every frame.
-            confirmed = object_tracker.update(detections, now=now)
-            candidates = []
-            for track in confirmed:
-                x1, y1, x2, y2 = track.bbox
-                area_ratio = max(0, x2 - x1) * max(0, y2 - y1) / max(1, w * h)
-                candidates.append({
-                    "label": track.label,
-                    "area_ratio": area_ratio,
-                    "is_very_close": area_ratio >= pipeline_settings["navigation"]["very_near_threshold"],
-                })
-            primary = select_most_relevant(candidates)
-            if primary:
-                tier = primary.get("tier") or classify_priority(primary["label"], primary["is_very_close"])
-                text = f"{primary['label'].capitalize()} ahead."
-                if announcer.announce(text, key=f"auto:{primary['label']}", tier=tier):
-                    state.last_auto_announcement = text
-                    event_log.record("auto_announcement", text=text, tier=tier,
-                                      domain=state.active_domain)
-            elif detections and not confirmed:
-                # Something was detected but never stabilized into a
-                # confirmed track - Section 40 prefers honest
-                # uncertainty over a confident-sounding wrong guess.
-                announcer.announce_unknown()
-        elif mode == "navigation":
-            # Bounding boxes flicker frame-to-frame (detection noise can
-            # briefly swap which object is "primary"), which used to
-            # trigger a burst of rapid-fire speech - fast enough to
-            # overwhelm pyttsx3's Windows driver into a stuck state that
-            # silently stops producing audio. Require an instruction to
-            # stay stable for NAV_DEBOUNCE_SECONDS before treating it as
-            # a real change worth interrupting speech for.
-            if instruction != _pending_nav_instruction:
-                _pending_nav_instruction = instruction
-                _pending_nav_since = now
-
-            if now - _pending_nav_since >= NAV_DEBOUNCE_SECONDS:
-                if instruction != _last_nav_instruction:
-                    speaker.speak(instruction, force=True)
-                    _last_nav_instruction = instruction
-                else:
-                    speaker.speak(instruction, dedup_key="nav")
-        else:
-            # Speak only newly-appeared object labels so the assistant
-            # doesn't repeat the same object every frame while it stays
-            # in view.
-            current_labels = {d["label"] for d in detections}
-            new_labels = current_labels - _previous_labels
-            for label in new_labels:
-                phrase = label
-                if mode == "color":
-                    color_for_label = next(
-                        (d["color"] for d in detections if d["label"] == label), None
+        # One unified pipeline for every detection-driven mode (Section 2):
+        # temporal confirmation -> priority engine -> zone/footpath-aware
+        # phrasing -> announcement manager. A detection only becomes
+        # eligible for speech after appearing consistently for several
+        # consecutive frames at real position stability, and even then
+        # only the single most relevant one gets spoken - never every
+        # detection, every frame, and never a raw single-frame reading.
+        if mode in ("auto", "navigation", "color"):
+            if active_domain is None:
+                # No domain model trained/available at all - say so
+                # honestly (Section 3) rather than staying mysteriously
+                # silent or quietly falling back to a generic model.
+                announcer.announce(
+                    "Detection model unavailable.", key="__model_unavailable__",
+                    cooldown=pipeline_settings["unknown_object"]["announcement_cooldown"],
+                )
+            else:
+                confirmed = object_tracker.update(detections, now=now)
+                candidates = []
+                for track in confirmed:
+                    # stable_bbox (rolling mean of recent frames) for
+                    # zone/size decisions, not the single latest bbox -
+                    # otherwise ordinary per-frame detection jitter near
+                    # a zone boundary flips "on your left"/"ahead"/"on
+                    # your right" every few seconds for an object that
+                    # hasn't actually moved (confirmed during live
+                    # testing - see modules/tracking.py).
+                    x1, y1, x2, y2 = track.stable_bbox
+                    cx = (x1 + x2) / 2
+                    area_ratio = max(0, x2 - x1) * max(0, y2 - y1) / max(1, w * h)
+                    zone = navigator._zone(cx, w)
+                    is_very_close = area_ratio >= pipeline_settings["navigation"]["very_near_threshold"]
+                    # Only trust footpath's "not walkable here" as a real
+                    # obstruction signal if it also confirmed walkable
+                    # ground somewhere else in the same frame - otherwise
+                    # "nothing walkable anywhere" almost always just means
+                    # the footpath model doesn't apply to this scene (e.g.
+                    # indoors), not that the path is blocked.
+                    blocks_path = bool(footpath_zones) and not footpath_zones.get(zone, True)
+                    candidates.append({
+                        "label": track.label, "zone": zone, "area_ratio": area_ratio,
+                        "is_very_close": is_very_close, "blocks_path": blocks_path,
+                    })
+                primary = select_most_relevant(candidates)
+                if primary:
+                    tier = classify_priority(primary["label"], primary["is_very_close"], primary["blocks_path"])
+                    descriptor = None
+                    if mode == "color":
+                        match = next(
+                            (d for d in detections if d["label"] == primary["label"] and d.get("color")),
+                            None,
+                        )
+                        descriptor = match["color"] if match else None
+                    label_text = f"{descriptor} {primary['label']}" if descriptor else primary["label"]
+                    text = navigator.phrase_for(
+                        label_text, primary["zone"], is_close=primary["is_very_close"],
+                        tier=tier, blocked=primary["blocks_path"],
                     )
-                    if color_for_label:
-                        phrase = f"{color_for_label} {label}"
-                speaker.speak(f"{phrase} detected", dedup_key=f"obj:{label}")
-            _previous_labels = current_labels
+                    # Section 10: "if nothing changes, do not repeat" - a
+                    # short cooldown alone only limits repeat *rate*, not
+                    # repetition itself, which is exactly what let a
+                    # stationary "very close" door get re-announced every
+                    # ~6s indefinitely during live testing. A genuinely
+                    # NEW situation (different label/zone/tier) still
+                    # gets announced right away; an UNCHANGED one falls
+                    # back to a much longer, tier-scaled repeat interval.
+                    situation_key = (mode, primary["label"], primary["zone"], tier)
+                    is_new_situation = situation_key != _last_situation_key
+                    # force=True for a genuinely new situation bypasses
+                    # the announcer's own per-key cooldown outright (that
+                    # cooldown is keyed by label only, not zone/tier, so
+                    # without this a door moving from "ahead" to "left"
+                    # within 6s of the last announcement would otherwise
+                    # still be suppressed as if it were a plain repeat).
+                    if announcer.announce(text, key=f"{mode}:{primary['label']}", tier=tier,
+                                           force=is_new_situation,
+                                           cooldown=SAME_SITUATION_REPEAT_SECONDS.get(tier, 30.0)):
+                        _last_situation_key = situation_key
+                        state.last_auto_announcement = text
+                        event_log.record("auto_announcement", text=text, tier=tier,
+                                          domain=active_domain, mode=mode)
+                elif detections and not confirmed:
+                    # Something was detected but never stabilized into a
+                    # confirmed track (position/class not stable across
+                    # consecutive frames) - prefer honest uncertainty over
+                    # a confident-sounding wrong guess (Section 2/15).
+                    announcer.announce_unknown()
+                elif footpath_zones and not footpath_zones.get("center", True) and mode != "color":
+                    # Nothing detected as an obstacle, but the footpath
+                    # model - having confirmed walkable ground exists
+                    # somewhere in frame - says the way directly ahead
+                    # specifically isn't part of it.
+                    announcer.announce("Path blocked.", key="__path_blocked__", tier="HIGH")
+                elif mode != "color":
+                    # Genuinely clear: nothing detected, and if footpath
+                    # info is available it confirms the way ahead is part
+                    # of the walkable path (Section 5's "Path ahead is
+                    # clear." example) - rate-limited like any other
+                    # announcement so it doesn't compete for airtime.
+                    announcer.announce(
+                        "Path ahead is clear.", key="__clear__", tier="LOW",
+                        cooldown=pipeline_settings["unknown_object"]["announcement_cooldown"],
+                    )
+        # mode == "qr": handled entirely above, alongside QR detection -
+        # no separate object-detection speech path needed.
 
         fps = fps_tracker.tick()
         state.update_detections(detections, fps)
@@ -522,7 +609,11 @@ def _voice_read_text(heard_text=""):
     if frame is None:
         speaker.speak("No camera frame available yet. Try again in a moment.", force=True)
         return
-    text, _ = get_ocr_reader().read_text(frame, min_confidence=config.OCR_MIN_CONFIDENCE)
+    state.processing = True
+    try:
+        text, _ = get_ocr_reader().read_text(frame, min_confidence=config.OCR_MIN_CONFIDENCE)
+    finally:
+        state.processing = False
     state.last_ocr_text = text
     speak_ocr_result(text)
     event_log.record("ocr_read", via="voice/gesture", chars=len(text))
@@ -533,6 +624,8 @@ def _voice_start_navigation(heard_text=""):
     if camera is None:
         start_camera()
     state.mode = "navigation"
+    object_tracker.reset()
+    announcer.reset()
     speaker.speak("Navigation mode activated.", force=True)
     event_log.record("mode_change", mode="navigation", via="voice/gesture")
 
@@ -541,9 +634,11 @@ def _voice_detect_objects(heard_text=""):
     state.set_redirect("/live")
     if camera is None:
         start_camera()
-    state.mode = "object"
-    speaker.speak("Object detection mode activated.", force=True)
-    event_log.record("mode_change", mode="object", via="voice/gesture")
+    state.mode = "auto"
+    object_tracker.reset()
+    announcer.reset()
+    speaker.speak("Automatic detection mode activated.", force=True)
+    event_log.record("mode_change", mode="auto", via="voice/gesture")
 
 
 def _voice_stop_speaking(heard_text=""):
@@ -569,6 +664,83 @@ def _voice_where_is(heard_text=""):
     speaker.speak(memory.describe(entry), force=True)
 
 
+def _voice_what_is_ahead(heard_text=""):
+    """"What is ahead?" / "What is this?" - Section 8's situational-
+    awareness query, distinct from "describe the scene": this repeats
+    the single most relevant thing auto-assistance has already
+    confirmed and announced, not a full object listing."""
+    if not state.camera_active:
+        speaker.speak("Camera is not active.", force=True)
+        return
+    if state.last_auto_announcement:
+        speaker.speak(state.last_auto_announcement, force=True)
+    else:
+        speaker.speak("Nothing has been clearly identified yet.", force=True)
+
+
+def _voice_identify_currency(heard_text=""):
+    if camera is None and not start_camera():
+        speaker.speak("Could not open the camera.", force=True)
+        return
+    frame = camera.get_frame()
+    if frame is None:
+        speaker.speak("No camera frame available yet. Try again in a moment.", force=True)
+        return
+    det = get_currency_detector()
+    if not det.is_ready:
+        speaker.speak("Currency detection is unavailable - no reference images configured.", force=True)
+        return
+    state.processing = True
+    try:
+        result = det.detect(frame)
+    finally:
+        state.processing = False
+    state.last_currency = result
+    if result:
+        speaker.speak(f"{result['denomination']} rupees.", force=True)
+        event_log.record("currency_detected", denomination=result["denomination"], via="voice")
+    else:
+        # Section 11: never guess a denomination.
+        speaker.speak("Currency not recognized clearly.", force=True)
+
+
+def _voice_indoor_mode(heard_text=""):
+    global _manual_domain_override
+    if not model_router.is_available("indoor"):
+        speaker.speak("Indoor detection model is unavailable.", force=True)
+        return
+    _manual_domain_override = "indoor"
+    refresh_model_status()
+    object_tracker.reset()
+    announcer.reset()
+    speaker.speak("Indoor mode activated.", force=True)
+    event_log.record("domain_override", domain="indoor", via="voice")
+
+
+def _voice_outdoor_mode(heard_text=""):
+    global _manual_domain_override
+    if not model_router.is_available("outdoor"):
+        speaker.speak("Outdoor detection model is unavailable.", force=True)
+        return
+    _manual_domain_override = "outdoor"
+    refresh_model_status()
+    object_tracker.reset()
+    announcer.reset()
+    speaker.speak("Outdoor mode activated.", force=True)
+    event_log.record("domain_override", domain="outdoor", via="voice")
+
+
+def _voice_automatic_mode(heard_text=""):
+    global _manual_domain_override
+    _manual_domain_override = None
+    refresh_model_status()
+    state.mode = "auto"
+    object_tracker.reset()
+    announcer.reset()
+    speaker.speak("Automatic mode activated.", force=True)
+    event_log.record("mode_change", mode="auto", via="voice/gesture")
+
+
 def _action_toggle_detection(heard_text=""):
     if state.camera_active:
         stop_camera()
@@ -586,13 +758,32 @@ def _voice_exit(heard_text=""):
 
 
 voice_listener.register("read text", _voice_read_text)
+voice_listener.register("read this", _voice_read_text)
 voice_listener.register("start navigation", _voice_start_navigation)
 voice_listener.register("detect object", _voice_detect_objects)
+# Longer/more-specific phrases registered before "stop speaking" so the
+# substring-matching in voice_commands.py doesn't also fire the generic
+# stop-speaking handler for these more specific "stop" requests. Since
+# _match_and_dispatch() dispatches to every phrase that matches (not
+# just the first), a bare "stop" WILL still additionally trigger
+# stop-speaking whenever one of these longer phrases is heard - that's
+# harmless here (interrupting speech is a reasonable side effect of any
+# "stop ..." command), so it's left as-is rather than engineered around.
 voice_listener.register("stop speaking", _voice_stop_speaking)
+voice_listener.register("stop", _voice_stop_speaking)
 voice_listener.register("repeat", _voice_repeat)
 voice_listener.register("describe the scene", _voice_describe_scene)
 voice_listener.register("what is around", _voice_describe_scene)
 voice_listener.register("what's in front", _voice_describe_scene)
+voice_listener.register("what is ahead", _voice_what_is_ahead)
+voice_listener.register("what's ahead", _voice_what_is_ahead)
+voice_listener.register("what is this", _voice_what_is_ahead)
+voice_listener.register("what's this", _voice_what_is_ahead)
+voice_listener.register("identify this currency", _voice_identify_currency)
+voice_listener.register("identify currency", _voice_identify_currency)
+voice_listener.register("indoor mode", _voice_indoor_mode)
+voice_listener.register("outdoor mode", _voice_outdoor_mode)
+voice_listener.register("automatic mode", _voice_automatic_mode)
 voice_listener.register("where is", _voice_where_is)
 voice_listener.register("where's", _voice_where_is)
 voice_listener.register("exit", _voice_exit)
@@ -669,17 +860,22 @@ def video_feed():
 
 @app.route("/mode", methods=["POST"])
 def api_set_mode():
-    global _previous_labels, _last_nav_instruction, _pending_nav_instruction, _pending_nav_since
     data = request.get_json(force=True, silent=True) or {}
-    mode = data.get("mode", "object")
-    if mode not in ("auto", "object", "navigation", "color", "qr"):
+    mode = data.get("mode", "auto")
+    # "object" is intentionally not a valid mode any more - it was the
+    # one remaining place the app used the generic COCO model with no
+    # temporal confirmation; see the audit notes in README.md. Existing
+    # clients that still request it are treated as "auto" rather than
+    # rejected outright.
+    if mode == "object":
+        mode = "auto"
+    if mode not in ("auto", "navigation", "color", "qr"):
         return jsonify({"success": False, "error": "invalid mode"}), 400
     state.mode = mode
-    _previous_labels = set()
-    _last_nav_instruction = None
-    _pending_nav_instruction = None
-    _pending_nav_since = 0.0
-    if mode == "auto":
+    if mode in ("auto", "navigation", "color"):
+        # Fresh mode, fresh "what have we already said" state - carrying
+        # tracks/cooldowns over from a different mode risks either a
+        # stale announcement or an unnecessary re-confirmation delay.
         object_tracker.reset()
         announcer.reset()
     event_log.record("mode_change", mode=mode, via="ui")
@@ -689,6 +885,37 @@ def api_set_mode():
 @app.route("/detections")
 def api_detections():
     return jsonify(state.snapshot())
+
+
+@app.route("/status")
+def api_status():
+    """Minimal, focused status for the User Mode home page (Section 8) -
+    deliberately a much smaller payload than /detections (which backs
+    the full Developer Mode dashboard): just what a blind user's status
+    view needs - is assistance active, is the camera working, what's
+    the assistant doing right now, what did it last say, and what mode
+    is it in. No bounding boxes, no FPS, no event log."""
+    if speaker.is_speaking:
+        activity = "Speaking"
+    elif state.processing:
+        activity = "Processing"
+    elif state.voice_active:
+        activity = "Listening"
+    else:
+        activity = "Idle"
+
+    mode_labels = {"auto": "Automatic", "navigation": "Navigation", "color": "Color", "qr": "QR Code"}
+
+    return jsonify({
+        "assistance_active": state.camera_active or state.voice_active,
+        "camera_active": state.camera_active,
+        "activity": activity,
+        "current_situation": state.last_auto_announcement or "Nothing identified yet.",
+        "last_spoken": speaker.last_text or "",
+        "mode": mode_labels.get(state.mode, state.mode.capitalize() if state.mode else "-"),
+        "active_domain": state.active_domain,
+        "model_status": dict(state.model_status),
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -701,7 +928,11 @@ def api_capture_ocr():
     frame = camera.get_frame()
     if frame is None:
         return jsonify({"success": False, "error": "No frame available"}), 400
-    text, boxes = get_ocr_reader().read_text(frame, min_confidence=config.OCR_MIN_CONFIDENCE)
+    state.processing = True
+    try:
+        text, boxes = get_ocr_reader().read_text(frame, min_confidence=config.OCR_MIN_CONFIDENCE)
+    finally:
+        state.processing = False
     state.last_ocr_text = text
     important_keyword = find_important_keyword(text) if text else None
     event_log.record("ocr_read", via="ui", chars=len(text))
@@ -727,13 +958,18 @@ def api_capture_currency():
             "success": False,
             "error": "No reference currency images found. Add images to dataset/currency/.",
         })
-    result = det.detect(frame)
+    state.processing = True
+    try:
+        result = det.detect(frame)
+    finally:
+        state.processing = False
     state.last_currency = result
     if result:
-        speaker.speak(f"{result['denomination']} rupee note detected", force=True)
+        speaker.speak(f"{result['denomination']} rupees.", force=True)
         event_log.record("currency_detected", denomination=result["denomination"])
     else:
-        speaker.speak("Currency not recognized", force=True)
+        # Section 11: never guess a denomination.
+        speaker.speak("Currency not recognized clearly.", force=True)
     return jsonify({"success": True, "result": result})
 
 

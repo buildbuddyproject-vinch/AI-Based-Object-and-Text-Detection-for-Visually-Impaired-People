@@ -2,8 +2,10 @@
 {% block title %}Live Camera - AI Blind Assistant{% endblock %}
 {% block content %}
 <section class="page-header">
-  <h1>Live Camera &amp; Object Detection</h1>
-  <p>Point the camera around you. Newly detected objects are announced aloud.</p>
+  <h1>Live Camera &amp; Object Detection <span class="devmode-tag">Developer Mode</span></h1>
+  <p>Visual debugging view of the same detection loop already running
+     for auto-assistance - not required for the assistant to work; see
+     <a href="{{ url_for('index') }}">Home</a> for the actual status.</p>
 </section>
 
 <div class="panel-grid">
@@ -15,7 +17,7 @@
     <div class="camera-controls">
       <button id="toggleCameraBtn" class="btn btn-primary">Start Camera</button>
       <div class="mode-switch" role="group" aria-label="Detection mode">
-        <button class="mode-btn active" data-mode="object">Object</button>
+        <button class="mode-btn active" data-mode="auto">Auto</button>
         <button class="mode-btn" data-mode="color">Color</button>
         <button class="mode-btn" data-mode="qr">QR Code</button>
       </div>

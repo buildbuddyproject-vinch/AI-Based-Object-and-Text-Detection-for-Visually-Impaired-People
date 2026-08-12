@@ -68,7 +68,7 @@
     await fetch("/mode", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode: navOn ? "navigation" : "object" }),
+      body: JSON.stringify({ mode: navOn ? "navigation" : "auto" }),
     });
     navBtn.textContent = navOn ? "⏹ Stop Navigation" : "🧭 Start Navigation";
     navBtn.classList.toggle("active", navOn);

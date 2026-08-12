@@ -108,7 +108,21 @@ class ModelRouter:
         return {domain: ("AVAILABLE" if ok else "NOT AVAILABLE")
                  for domain, ok in self._availability.items()}
 
+    def set_domain_confidence(self, confidence_by_domain):
+        """Update per-domain confidence thresholds after construction
+        (app.py calls this at startup with config/config.yaml's
+        `confidence:` section). Only affects models loaded AFTER this
+        call - if a domain's detector was already lazily loaded with
+        the old threshold, drop its cache so the next get_detector()
+        call re-loads it with the new one instead of silently keeping
+        the stale value."""
+        self.confidence_by_domain.update(confidence_by_domain)
+        for domain in list(self._loaded.keys()):
+            if domain in confidence_by_domain:
+                del self._loaded[domain]
+
 
 # Single shared instance - app.py wires real per-domain confidence
-# thresholds into this at startup (see config/config.yaml).
+# thresholds into this at startup via set_domain_confidence() (see
+# config/config.yaml's `confidence:` section).
 router = ModelRouter()

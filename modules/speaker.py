@@ -108,6 +108,12 @@ class Speaker:
         # assistant is talking - otherwise it hears its own voice and
         # tries to parse it as a new command.
         self._speaking_event = threading.Event()
+        # Set just before stop() terminates an in-flight worker, so
+        # _speak_once can tell "I killed this on purpose" (e.g. a
+        # CRITICAL announcement interrupting) apart from a genuine TTS
+        # crash - both produce the same nonzero exit code from
+        # terminate(), but only one is actually an error worth logging.
+        self._deliberately_stopped = threading.Event()
 
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
@@ -127,6 +133,7 @@ class Speaker:
                 str(self.rate), str(self.volume), self.voice_id or ""]
 
         self._speaking_event.set()
+        self._deliberately_stopped.clear()
         t0 = time.time()
         try:
             log.info('Speaking: "%s"', text)
@@ -148,8 +155,16 @@ class Speaker:
                 return
 
             if proc.returncode != 0:
-                log.error("TTS worker exited with code %s for %r: %s",
-                          proc.returncode, text, (stderr or "").strip())
+                if self._deliberately_stopped.is_set():
+                    # Interrupted on purpose (e.g. a CRITICAL announcement
+                    # cutting off a lower-priority one still playing) -
+                    # working as designed, not a failure worth alarming
+                    # about in the logs.
+                    log.info('Interrupted (higher-priority speech): "%s" (%.2fs)',
+                             text, time.time() - t0)
+                else:
+                    log.error("TTS worker exited with code %s for %r: %s",
+                              proc.returncode, text, (stderr or "").strip())
             else:
                 log.info("Finished speaking (%.2fs)", time.time() - t0)
                 # Surface the worker's own diagnostics (e.g. whether the
@@ -167,6 +182,12 @@ class Speaker:
     @property
     def is_speaking(self):
         return self._speaking_event.is_set()
+
+    @property
+    def last_text(self):
+        """The last phrase actually queued to speak - used by the User
+        Mode status page (Section 8: "Last spoken message")."""
+        return self._last_text
 
     def speak(self, text, dedup_key=None, force=False):
         """Queue `text` to be spoken.
@@ -210,6 +231,7 @@ class Speaker:
         with self._queue.mutex:
             self._queue.queue.clear()
         if self._current_process is not None:
+            self._deliberately_stopped.set()
             try:
                 self._current_process.terminate()
             except Exception:

@@ -5,14 +5,18 @@ Listens on the microphone in a background thread using SpeechRecognition
 and dispatches recognized phrases to registered callback functions.
 
 Supported commands (registered by app.py):
-    "read text"           -> capture the current frame with OCR and read it
-    "start navigation"     -> switch live detection into navigation mode
-    "detect objects"       -> switch live detection back to object mode
-    "stop speaking"         -> interrupt/clear current speech
-    "repeat"                -> speak the last announcement again
-    "describe the scene"     -> summarize what's currently detected
-    "where is my <object>"   -> answer from recent detection memory
-    "exit"                    -> stop the voice assistant thread
+    "read text" / "read this"      -> capture the current frame with OCR and read it
+    "start navigation"              -> switch live detection into navigation mode
+    "detect object"                 -> switch live detection into automatic mode
+    "automatic mode"                -> automatic mode + clear any indoor/outdoor override
+    "indoor mode" / "outdoor mode"  -> pin auto-assistance to one domain model
+    "what is ahead" / "what is this" -> repeat the last confirmed situational announcement
+    "identify this currency"        -> capture + run currency detection
+    "stop speaking" / "stop"        -> interrupt/clear current speech
+    "repeat"                        -> speak the last announcement again
+    "describe the scene" / "what is around" -> summarize what's currently detected
+    "where is my <object>"          -> answer from recent detection memory
+    "exit"                          -> stop the voice assistant thread
 
 Each registered callback receives the full recognized phrase as its
 only argument (e.g. "where is my backpack") so commands like "where is

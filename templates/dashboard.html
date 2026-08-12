@@ -1,9 +1,12 @@
 {% extends "base.html" %}
-{% block title %}Dashboard - AI Blind Assistant{% endblock %}
+{% block title %}Developer Mode - AI Blind Assistant{% endblock %}
 {% block content %}
 <section class="page-header">
-  <h1>System Dashboard</h1>
-  <p>Live engineering metrics - performance, feature status, and recent activity.</p>
+  <h1>🛠️ Developer Mode</h1>
+  <p>Live engineering metrics, model status, and event log - for
+     development/testing, not the blind user. See the
+     <a href="{{ url_for('index') }}">Home page</a> for the actual
+     voice-first assistant status.</p>
 </section>
 
 <div class="dashboard-grid">

@@ -26,11 +26,64 @@ RealSense, LiDAR).
 import numpy as np
 
 
+def footpath_walkability(footpath_detections, frame_width):
+    """Given the footpath model's raw detections (single class
+    "footpath" marking the walkable region as a bounding box - a
+    detector, NOT segmentation, despite the dataset folder name; see
+    tools/analyze_datasets.py's findings), return which thirds of the
+    frame currently contain a detected walkable footpath region:
+    {"left": bool, "center": bool, "right": bool}.
+
+    A zone counts as walkable if a footpath detection covers at least
+    a quarter of that zone's width - a deliberately loose threshold
+    since this is a supplementary signal (feeds into CRITICAL/blocked-
+    path escalation), not the sole source of truth."""
+    thirds = {
+        "left": (0, frame_width / 3),
+        "center": (frame_width / 3, 2 * frame_width / 3),
+        "right": (2 * frame_width / 3, frame_width),
+    }
+    walkable = {"left": False, "center": False, "right": False}
+    for det in footpath_detections:
+        if det.get("label") != "footpath":
+            continue
+        x1, _, x2, _ = det["bbox"]
+        for zone, (lo, hi) in thirds.items():
+            zone_width = hi - lo
+            overlap = max(0, min(x2, hi) - max(x1, lo))
+            if zone_width > 0 and overlap / zone_width >= 0.25:
+                walkable[zone] = True
+    return walkable
+
+
 class NavigationAssistant:
     def __init__(self, near_area_ratio=0.18):
         # bbox_area / frame_area above this ratio is treated as "close"
         # when no depth map is available.
         self.near_area_ratio = near_area_ratio
+
+    @staticmethod
+    def phrase_for(label, zone, is_close=False, tier=None, blocked=False):
+        """Build a short, zone-aware phrase for a single already-chosen
+        object (Section 5: "situational awareness", not "object
+        listing" - who to talk about is decided upstream by temporal
+        confirmation + the priority engine; this only decides how to
+        phrase it). "Warning." only prefixes CRITICAL-tier phrases -
+        never a blanket safety claim (Section 15)."""
+        label_cap = label.capitalize()
+        if blocked:
+            phrase = f"Path blocked. {label_cap} ahead."
+        elif zone == "left":
+            phrase = f"{label_cap} on your left."
+        elif zone == "right":
+            phrase = f"{label_cap} on your right."
+        else:
+            phrase = f"{label_cap} ahead."
+        if is_close:
+            phrase += " It's very close."
+        if tier == "CRITICAL":
+            phrase = "Warning. " + phrase
+        return phrase
 
     @staticmethod
     def _zone(cx, frame_width):

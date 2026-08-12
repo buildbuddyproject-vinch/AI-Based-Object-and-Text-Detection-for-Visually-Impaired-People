@@ -109,7 +109,8 @@ AI-Based Object and Text Detection for Visually Impaired People/
 ├── templates/                 # Jinja2 pages - now labelled as the optional dashboard
 ├── static/
 │   ├── css/style.css           # Blue accessibility theme + dark mode
-│   └── js/                     # main.js, camera.js, ocr.js, navigation.js, voice.js, dashboard.js
+│   └── js/                     # user_mode.js (Home/status), camera.js, ocr.js,
+│                               # navigation.js, voice.js, dashboard.js, main.js
 │
 ├── tools/
 │   ├── dataset_common.py       # Shared watermark-filtering + VOC-box-conversion helpers
@@ -234,50 +235,52 @@ What follows documents the **optional dashboard** pages, for anyone
 who wants to see/demo what the assistant is doing, and the voice
 commands that work regardless of whether the dashboard is ever opened.
 
-1. **Home** — optional dashboard landing page; "Start Camera"/"Voice
-   Assistant" buttons here just give a visual window into the same
-   auto-started camera/mic, not a way to turn them on.
-2. **Live Camera** — click **Start Camera**, choose a mode (Object /
-   Color / QR Code), and detected items are spoken aloud as they appear.
-   - **💵 Detect Currency** to scan a note (needs reference images —
-     see `dataset/currency/README.md`).
-   - **🗣️ Describe Scene** for an on-demand natural-language summary of
-     everything currently detected.
-   - **✋ Gesture Control** toggle enables hand-gesture commands (see below).
-3. **OCR** — start the camera, aim at printed text, click **Capture &
-   Read Text**, then **Read Aloud**. Text is read in proper top-to-bottom
-   reading order, and a toast warns you if it contains a safety-relevant
-   keyword (exit, danger, wet floor, etc.) before you even read it.
-4. **Navigation** — start the camera, click **Start Navigation** to get
-   spoken Left/Center/Right obstacle guidance. If MiDaS depth estimation
-   loaded successfully (needs internet the first time), guidance also
-   distinguishes "very close" from "farther away" using real per-pixel
-   depth, not just bounding-box size.
-5. **Voice Assistant** — click the mic button and say:
-   - `"read text"` — capture + read text aloud (auto-starts the camera)
-   - `"start navigation"` — switch to navigation mode (auto-starts the camera)
-   - `"detect objects"` — switch to object detection mode
-   - `"stop speaking"` — interrupt current speech
+1. **Home (User Mode)** — the actual primary interface (Section 8):
+   a minimal, read-only status view - "AI ASSISTANCE ACTIVE", camera
+   status, Listening/Processing/Speaking, current situation, last
+   spoken message, current mode. Nothing on it needs to be clicked.
+2. **Developer Mode** (Live Camera / OCR / Navigation / Voice /
+   Dashboard, clearly labelled as such in the nav) — visual debugging
+   views of the same auto-started pipeline, for demos/development, not
+   for the blind end user:
+   - **Live Camera** — mode switch (Auto / Color / QR Code), bounding
+     boxes + confidence, **💵 Detect Currency**, **🗣️ Describe Scene**,
+     **✋ Gesture Control** toggle.
+   - **OCR** — **Capture & Read Text** then **Read Aloud**, same as
+     saying "read this". Reading order is top-to-bottom, and a toast
+     calls out safety-relevant keywords (exit, danger, wet floor, ...)
+     before you even read the rest.
+   - **Navigation** — visual Left/Center/Right obstacle panel; guidance
+     is spoken automatically once this mode is active, using real
+     per-pixel MiDaS depth when it's loaded, never a fabricated distance.
+   - **Dashboard** — live FPS/CPU/memory, per-domain model
+     AVAILABLE/NOT AVAILABLE status, active domain, last spoken
+     announcement, and a running event log.
+3. **Voice Assistant** (works everywhere, no page needs to be open):
+   - `"what is ahead"` / `"what is this"` — repeat the last confirmed situational announcement
+   - `"read this"` / `"read text"` — capture + read printed text aloud
+   - `"identify this currency"` — capture + run currency detection
+   - `"describe the scene"` / `"what is around"` — full summary of everything currently detected
+   - `"start navigation"` / `"automatic mode"` / `"indoor mode"` / `"outdoor mode"` — switch modes
+   - `"stop speaking"` / `"stop"` — interrupt current speech
    - `"repeat"` — say the last announcement again
-   - `"describe the scene"` — summarize what's currently detected
-   - `"where is my bag"` (or any recently-seen object) — answered from
-     a short-term detection memory
+   - `"where is my bag"` (or any recently-seen object) — answered from short-term memory
    - `"exit"` — stop the voice assistant
-6. **Hand Gestures** — enable "Gesture Control" on the Live Camera page,
+4. **Hand Gestures** — enable "Gesture Control" on the Live Camera page,
    then hold a hand up to the camera: **fist** = start/stop detection,
    **open palm** = stop speaking, **peace sign** = read text, **one
    finger** = describe the scene, **thumbs up** = repeat. Same actions
    as the voice commands above — use whichever input suits the moment.
-7. **Dashboard** — live FPS, CPU/memory usage, which features are
+5. Dashboard also shows: live FPS, CPU/memory usage, which features are
    currently active, and a running event log (mode changes, SOS
    triggers, detections, gestures, etc.) — useful for a demo/report.
-8. **SOS** — the red **SOS** button in the header is available on every
+6. **SOS** — the red **SOS** button in the header is available on every
    page and triggers a simulated emergency alert (spoken + logged),
    including your real location if the browser reported one.
-9. **Dark Mode** — toggle via the 🌙/☀️ icon in the header; your choice
+7. **Dark Mode** — toggle via the 🌙/☀️ icon in the header; your choice
    is remembered.
-10. **Battery Saver** — toggle on the Live Camera page to reduce frame
-    rate and resolution for lower CPU/battery usage.
+8. **Battery Saver** — toggle on the Live Camera page to reduce frame
+   rate and resolution for lower CPU/battery usage.
 
 ---
 
@@ -357,15 +360,20 @@ report being misread:**
   in any of them - see [Final Status Report](#-final-status-report)).
   It's listed now so the router's shape doesn't need to change later.
 
-**Scope note:** this no-silent-fallback rule governs `mode == "auto"`
-— the actual AUTO ASSISTANCE announcement path (`app.py`'s detection
-loop, gated through `model_router.get_detector(active_domain)` only).
-The dashboard's manual **Live Camera → Object** mode is a separate,
-pre-existing, clearly-optional demo view that still uses the generic
-`yolov8n.pt` via `get_detector()` — this is a deliberate, documented
-choice (a general-purpose demo of the underlying detector, not a
-disguised substitute for a missing domain model) rather than an
-oversight, and it never runs during unattended auto-assistance.
+**Update (post-launch audit):** an earlier version of this README
+described the dashboard's Live Camera "Object" mode as a deliberate
+exception that still used the generic `yolov8n.pt`. A live-testing
+audit (see [Audit & Redesign Findings](#-audit--redesign-findings))
+found this was actually the root cause of a real "fan detected as
+airplane"-style false positive, and worse, that mode had **no
+temporal confirmation at all** - just a weak "was this label present
+last frame" check. Both the generic-COCO usage and the standalone
+"object" mode have since been **removed entirely**. Every live
+detection path - `auto`, `navigation`, and `color` - now goes through
+the exact same `model_router` + temporal-confirmation + priority-engine
+pipeline described above, with zero exceptions. If no domain model is
+available, the dashboard now honestly says "Detection model
+unavailable." instead of ever touching a generic model.
 
 ---
 
@@ -772,6 +780,82 @@ instead.
 
 ---
 
+## 🔍 Audit & Redesign Findings
+
+After the initial auto-assistance build (above), real live-camera
+testing surfaced two categories of problems: detection reliability and
+a UI that read like a visual dashboard rather than an assistive tool.
+This section documents what was actually found and fixed - every claim
+below was verified against real running logs, not assumed.
+
+### A duplicate-process bug was corrupting test results
+
+The very first thing the audit found wasn't a code bug at all: **two
+`app.py` processes were both bound to port 5000 simultaneously** - the
+current one, and an hours-old zombie left running from a much earlier
+testing session, before any of the model-router/tracking work existed.
+Requests were being non-deterministically routed to whichever process
+the OS picked, which explains a lot of the inconsistent behavior seen
+before this audit (e.g. a `/camera/stop` call silently landing on the
+dead process while the real one kept running). Confirmed via the
+zombie's own logs, which used the pre-refactor `"<label> detected"`
+speech format instead of the current `"<label> ahead."` format. Fixed
+by killing it; the broader lesson (always verify only one server
+instance is running before testing) is now something to check first,
+not assume.
+
+### The fan → airplane problem: found and fixed at the root
+
+**Cause:** the dashboard's old "Object" mode (`mode == "object"`) was
+a separate code path from `mode == "auto"` that always ran the
+generic, COCO-pretrained `yolov8n.pt` via a module-level `get_detector()`
+helper - completely bypassing `model_router` and its no-silent-fallback
+guarantee. Worse, that mode's spoken-feedback logic had **no temporal
+confirmation at all**: it only checked "was this label present in the
+immediately-previous single frame," with no confidence-stability,
+position-stability, or cooldown beyond that. COCO has an `airplane`
+class and no `fan` class, and is a well-documented source of
+spinning-blade-blur false positives against `airplane` - so a single
+noisy frame in that mode could be spoken immediately, with nothing to
+stop it.
+
+**Fix:** `get_detector()` and the standalone `"object"` mode were
+**deleted entirely**, not patched. Every live detection path -
+`auto`, `navigation`, and `color` - now shares one pipeline: `model_router`
+(real domain model or an honest "Detection model unavailable.", never
+COCO) → `modules/tracking.py`'s temporal confirmation → the priority
+engine → zone-aware phrasing. `mode="object"` is still accepted from
+old clients for backward compatibility, but is silently treated as
+`"auto"` rather than resurrecting the old behavior.
+
+### Other real bugs found via live testing, and their fixes
+
+| Finding | Fix |
+|---|---|
+| `config/config.yaml`'s `confidence:` section was **never actually wired in** - a `router.set_domain_confidence()` call was documented in a comment but never made, so every domain silently ran at the hardcoded 0.45 default regardless of config. The yaml also used `hazard` while the router's key is `road_hazards`. | Added `ModelRouter.set_domain_confidence()` and call it at startup with the (now key-corrected) config values. |
+| The low-light warning re-spoke the identical sentence every ~30 seconds for as long as the scene stayed dark - confirmed live over a 20+ minute dark session, 20+ repeats of the same phrase. Directly violates "if nothing changes, do not repeat." | Speaks once when the scene *becomes* dark, then stays quiet until either light returns or `LOW_LIGHT_REMINDER_INTERVAL` (5 min) passes. |
+| `speaker.stop()`'s `terminate()` call on an in-flight TTS subprocess (e.g. a CRITICAL announcement interrupting a lower-priority one) produced a nonzero exit code logged as `ERROR - TTS worker exited with code 1` - working-as-designed behavior that looked like a crash in the logs. | `Speaker` now tracks whether it deliberately terminated the process and logs that case as `INFO`, not `ERROR`. |
+| **The exact same confirmed announcement repeated every ~6 seconds indefinitely** for a stationary object (e.g. "Warning. Door ahead. It's very close." 4x in 24 seconds) - a short per-key cooldown limits repeat *rate*, not repetition itself. Directly reproduced live, then fixed and re-verified live. | Auto/navigation/color announcements now track the last *situation* (mode+label+zone+tier) spoken. An unchanged situation falls back to a much longer, tier-scaled repeat interval (12-30s); a genuinely new one (different label, zone, or escalating tier) still announces immediately. |
+| **A stationary object's announced zone flickered** between "on your left" / "ahead" / "on your right" every few seconds - each individual detection was itself correct, but zone was computed from only the single latest frame's bounding box, which jitters near zone boundaries even for a confirmed, unmoving object. Reproduced live, then fixed. | `TrackedObject` now exposes `stable_bbox` (a rolling mean of the last 5 frames), used for zone/distance decisions instead of the single latest frame's box. Reduces, but per honest live re-testing does not fully eliminate, boundary-adjacent flicker - see Remaining Work. |
+| The trained `models/footpath/best.pt` existed but was never actually called anywhere in the live pipeline - a real trained model sitting unused. | Wired into `auto`/`navigation` modes: runs alongside the domain detector, computes per-zone walkability, and feeds a `blocks_path` signal into the priority engine (only trusted when footpath confirmed walkable ground exists *somewhere* in frame, so "nothing walkable anywhere" - the normal indoor case, where footpath doesn't apply - is never misread as "the path is blocked"). |
+| `currency`/`OCR` were already on-demand only (not continuous per-frame), and currency already reported "not recognized" honestly on a miss - both already matched Sections 11/12's intent without changes. Phrasing was tightened to the exact requested wording ("Currency not recognized clearly.", "`<denomination>` rupees."). | Phrasing fix only; no architecture change was needed here. |
+
+### UI redesign: User Mode vs. Developer Mode
+
+The Home page (`/`) is now the literal thing Section 8 asked for -
+`AI ASSISTANCE ACTIVE`, camera status, a `Listening`/`Processing`/
+`Speaking` indicator, current situation, last spoken message, current
+mode - backed by a new, deliberately tiny `/status` API (not the much
+heavier `/detections` payload). Nothing on it needs to be clicked.
+Every other page (Live Camera, OCR, Navigation, Voice Assistant,
+Dashboard) is now explicitly labelled **"Developer Mode"** in its
+heading and in the nav bar, with a one-line note pointing back to Home
+for the real assistant status - existing functionality kept, nothing
+rebuilt, just honestly relabelled as what it actually is: a debugging
+view, not the primary interface.
+
+---
+
 ## 📋 Final Status Report
 
 Honest, per-domain status as actually built and measured against this
@@ -899,6 +983,25 @@ requirement stops it from being mis-announced as something else
    minimum) will likely have weak per-class accuracy - check
    `runs/household/train/confusion_matrix.png` once trained before
    trusting them individually.
+10. **Residual zone-boundary flicker** - `stable_bbox`'s 5-frame rolling
+    average (see Audit & Redesign Findings) measurably reduces but does
+    not fully eliminate an object's announced zone changing when its
+    true position sits right at a left/center or center/right boundary.
+    A hysteresis-based zone state machine (require N consecutive frames
+    in the *new* zone before treating it as a real transition, not just
+    a smoothed average crossing the line) would fix this more
+    completely, at the cost of slightly slower reporting of genuine
+    movement - a real safety/annoyance tradeoff worth deciding
+    deliberately rather than defaulting silently.
+11. **Class confusion between visually similar trained classes** (e.g.
+    indoor's `door` vs `cabinetDoor`/`refrigeratorDoor` for the same
+    physical object) was observed during live audit testing - each
+    individual detection clears its confidence threshold, so the
+    tracker correctly confirms both as separate tracks, but the result
+    can alternate which label gets spoken. This is a genuine model
+    discriminability limit at the current training budget (consistent
+    with indoor's measured 0.456 mAP50), not a pipeline bug - more
+    training data distinguishing these classes is the real fix.
 
 ---
 

@@ -17,6 +17,7 @@
     </a>
     <nav class="main-nav" aria-label="Main navigation">
       <a href="{{ url_for('index') }}" class="{{ 'active' if active=='home' else '' }}">Home</a>
+      <span class="nav-group-label" aria-hidden="true">Developer Mode:</span>
       <a href="{{ url_for('live') }}" class="{{ 'active' if active=='live' else '' }}">Live Camera</a>
       <a href="{{ url_for('ocr_page') }}" class="{{ 'active' if active=='ocr' else '' }}">OCR</a>
       <a href="{{ url_for('navigation_page') }}" class="{{ 'active' if active=='navigation' else '' }}">Navigation</a>

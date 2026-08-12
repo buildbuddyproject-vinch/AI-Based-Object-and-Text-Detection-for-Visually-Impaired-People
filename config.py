@@ -55,7 +55,12 @@ GESTURE_COOLDOWN_SECONDS = 2.5   # don't re-trigger the same gesture faster than
 # --- Low-light detection -----------------------------------------------------
 LOW_LIGHT_THRESHOLD = 60          # mean grayscale brightness (0-255) below this = "dark"
 LOW_LIGHT_CHECK_INTERVAL = 2.0    # seconds between brightness checks
-LOW_LIGHT_WARNING_COOLDOWN = 30.0  # don't repeat the spoken warning faster than this
+# Speaks once as soon as the scene goes dark, then stays quiet about it
+# (Section 10: "if nothing changes, do not repeat") until either the
+# light comes back (resetting the warning) or this much time has passed
+# in one continuous dark session, whichever is sooner - a single gentle
+# reminder rather than nagging every 30s for as long as it stays dark.
+LOW_LIGHT_REMINDER_INTERVAL = 300.0
 
 # --- Fall detection (heuristic, experimental - see modules/fall_detector.py)
 ENABLE_FALL_DETECTION = os.environ.get("ENABLE_FALL_DETECTION", "1") == "1"
