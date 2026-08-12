@@ -905,7 +905,7 @@ script's own `model.val()` output, never hand-typed.
 | Domain | Dataset | Status | Notes |
 |---|---|---|---|
 | **indoor** | 1,012 train / 230 val / 107 test images, 10 classes (door, cabinetDoor, refrigeratorDoor, window, chair, table, cabinet, couch, openedDoor, pole) | ✅ TRAINED | 20 epochs, `yolov8n.pt` base, CPU, imgsz 416. **Real measured validation results: mAP50 = 0.456, mAP50-95 = 0.303, precision = 0.672, recall = 0.430** (230 val images, 1,289 instances) - see per-class breakdown below. |
-| **household** | 5,400 train / 600 val images (capped from 27,519 real photos), 93 classes (Shoe, Cup, Cooking pot, Hand, Toothbrush, Plate, Toy, Cutlery, Book, Power outlet, ...) | ✅ TRAINED (reduced scope) | 8 epochs (scoped down from 25 - see note above), `yolov8n.pt` base, CPU, imgsz 416. **Real measured validation results: mAP50 = 0.226, mAP50-95 = 0.151, precision = 0.523, recall = 0.233** (600 val images). Still improving steadily at epoch 8, not converged - expect meaningfully better numbers from `--epochs 25`+. 1 class ("Cleaning floor", 3 examples) dropped for having fewer than 20 examples. Per-class breakdown across 93 classes is too large for this table - see `runs/household/train/confusion_matrix.png` and `results.csv` for the full picture; rarest classes (near the 20-example minimum) are expected to be weakest. |
+| **household** | 5,400 train / 600 val images (capped from 27,519 real photos), 93 classes (Shoe, Cup, Cooking pot, Hand, Toothbrush, Plate, Toy, Cutlery, Book, Power outlet, ...) | ✅ TRAINED (18 effective epochs) | 8 epochs, then continued 10 more from that checkpoint (`--base-model models/household/best.pt`) once the live app was stopped and freed the CPU - `yolov8n.pt`-derived, CPU, imgsz 416. **Real measured validation results after 18 effective epochs: mAP50 = 0.277, mAP50-95 = 0.188, precision = 0.515, recall = 0.286** (600 val images) - up from 0.226/0.151/0.523/0.233 at 8 epochs; recall improved the most. Still not fully converged - `training/train_household.py --epochs 25 --base-model models/household/best.pt` (continuing further, not restarting) remains the natural next step. 1 class ("Cleaning floor", 3 examples) dropped for having fewer than 20 examples. Per-class breakdown across 93 classes is too large for this table - see `runs/household/train/confusion_matrix.png` and `results.csv` for the full picture; rarest classes (near the 20-example minimum) are expected to be weakest. |
 | **footpath** | 40 train / 9 val images, 1 class (footpath) | ✅ TRAINED | Stopped early at epoch 17/50 (`patience=15` - no improvement since epoch 2, exactly as configured). **Real measured validation results: mAP50 = 0.573, mAP50-95 = 0.375, recall = 0.900, precision = 0.003** (9 val images, 10 instances). The very low precision alongside high recall is a real, honest signature of overfitting on ~50 images - the model finds real footpath regions (high recall) but also throws a lot of spurious low-confidence boxes (YOLO's `val()` sweeps confidence thresholds for the mAP curve, which is why precision looks this extreme at the reported operating point). Treat this model as a proof-of-concept only - see Remaining Work. Two corrupt JPEGs in the val split were auto-repaired by Pillow/OpenCV during validation, a genuine data-quality issue worth fixing at the source. |
 | **outdoor** | 861 real XML annotations (1,013 objects after stripping 2,899 watermark labels), 13 classes (car, pole, truck, flyover, hoarding, traffic symbols, pedestrian, traffic signal, bus, building, bike, auto rickshaw, caravan) | 🔴 NOT TRAINABLE | **Zero source images exist for any of the 861 annotated XML files anywhere in `dataset/`.** See `training/train_outdoor.py` for the full explanation and what's needed to unblock it. |
 | **currency** | 6 reference images (one per denomination) | 🟢 WORKING (not a trained model) | ORB feature-matching (`modules/currency_detector.py`), not YOLO - reports "not recognized" honestly on a miss rather than guessing. |
@@ -971,11 +971,11 @@ requirement stops it from being mis-announced as something else
 
 ### Remaining Work
 
-1. **Train household further** - `models/household/best.pt` exists and
-   works, but only 8 epochs were run (see the scope-reduction note
-   above); mAP50 was still climbing steadily, not plateaued, so
-   `training/train_household.py --epochs 25` (or more) on a faster
-   machine/GPU should meaningfully improve on 0.226 mAP50.
+1. **Train household further** - now at 18 effective epochs (0.277
+   mAP50, up from 0.226 at epoch 8), still not fully converged.
+   `training/train_household.py --epochs 25 --base-model
+   models/household/best.pt` (continuing from the current checkpoint,
+   not restarting from scratch) remains the natural next step.
 2. **Collect more footpath images.** ~50 source images produced a
    model that overfits (0.9 recall but 0.003 precision at `val()`'s
    reported operating point) - more images from varied locations/
