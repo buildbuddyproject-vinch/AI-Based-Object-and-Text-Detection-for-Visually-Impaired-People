@@ -39,6 +39,17 @@
       <li>Depth Estimation <span id="statusDepth" class="status-badge">-</span></li>
     </ul>
 
+    <h2>Model Availability</h2>
+    <p class="hint-text">Honest per-domain status - a domain with no
+      trained model is never silently swapped for a generic model.</p>
+    <ul id="modelStatusList" class="status-list">
+      <li class="empty-state">Loading...</li>
+    </ul>
+    <p>Auto-assistance is currently using:
+      <strong id="activeDomain">-</strong></p>
+    <p>Last spoken announcement:
+      <em id="lastAnnouncement">-</em></p>
+
     <h2>Event Counters</h2>
     <ul id="eventCounters" class="counter-list">
       <li class="empty-state">No events yet.</li>

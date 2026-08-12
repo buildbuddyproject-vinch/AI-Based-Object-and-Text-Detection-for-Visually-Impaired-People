@@ -50,6 +50,11 @@ mediapipe>=1.0
 # otherwise.
 onnxruntime>=1.20
 
+# Reads config/config.yaml (utils/pipeline_settings.py). Already pulled
+# in transitively by ultralytics, but listed explicitly since this
+# project's own code imports it directly.
+pyyaml>=6.0
+
 # Notes:
 # - `ultralytics` and `easyocr` pull in torch/torchvision automatically;
 #   the first `pip install` may take a while and download several

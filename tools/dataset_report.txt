@@ -1,0 +1,101 @@
+Scanning datasets under: E:\vinu\AI-Based Object and Text Detection for Visually Impaired People\dataset
+
+==============================================================================
+DATASET: CURRENCY
+==============================================================================
+name: currency
+path: E:\vinu\AI-Based Object and Text Detection for Visually Impaired People\dataset\currency
+exists: True
+format: single reference image per denomination, used for ORB feature-matching in modules/currency_detector.py - NOT a trainable detection dataset in its current form
+images: 6
+denominations_found: ['100rs.png', '10rs.png', '200rs.png', '20rs.png', '500rs.png', '50rs.png']
+recommended_task: keep as-is for template matching, OR collect many real photos per denomination (varied angle/lighting/background/wear) if a trained classifier/detector is wanted instead of ORB matching
+unexpected_files: ['AI-Based Object and Text Detection for Visually Impaired People.code-workspace']
+
+==============================================================================
+DATASET: FOOTPATH
+==============================================================================
+name: Footpath
+path: E:\vinu\AI-Based Object and Text Detection for Visually Impaired People\dataset\Footpath
+exists: True
+format: Pascal VOC XML, axis-aligned bounding boxes (<bndbox> xmin/ymin/xmax/ymax). NOT segmentation - <segmented>0</segmented> in every file checked, despite the folder name suggesting otherwise
+images: 50
+annotations: 50
+images_without_annotation: []
+annotations_without_image: []
+corrupted_xml_files: []
+segmented_flag_values_seen: {'0': 50}
+classes: {'footpath': 51}
+objects_per_image_min: 0
+objects_per_image_max: 2
+objects_per_image_avg: 1.02
+train_val_test_split: none present - all images in one flat folder
+recommended_task: YOLO object detection, single class 'footpath' (a box marking the walkable region) - not a segmentation task
+concerns: ['Only 50 images total - very small for a generalizing detector; expect overfitting without heavy augmentation or substantially more data', 'No train/val/test split provided - must be created before training']
+
+==============================================================================
+DATASET: HOUSEHOLD
+==============================================================================
+name: household
+path: E:\vinu\AI-Based Object and Text Detection for Visually Impaired People\dataset\household
+exists: True
+format: Supervisely-style JSON per image (ann/<file>.jpg.json + img/<file>.jpg pairs), one folder per Dollar Street theme/collection
+theme_folders: 138
+total_images: 27519
+total_annotated_objects: 32099
+images_with_zero_annotated_objects: 9825
+corrupted_json_files: []
+geometry_types_used: {'rectangle': 32099}
+distinct_classes: 94
+top_30_classes_by_frequency: (30 entries, showing first 15)
+  - ('Shoe', 2114)
+  - ('Cup', 1625)
+  - ('Cooking pot', 1194)
+  - ('Hand', 1131)
+  - ('Toothbrush', 742)
+  - ('Plate', 736)
+  - ('Toy', 730)
+  - ('Cutlery', 654)
+  - ('Book', 618)
+  - ('Power outlet', 610)
+  - ('Vegetable', 600)
+  - ('Armchair', 594)
+  - ('Cooking utensils', 575)
+  - ('Soap', 567)
+  - ('Lock on front door', 550)
+rarest_10_classes_with_at_least_1: [('Cleaning floor', 3), ('Goat', 33), ('Dishwasher', 41), ('Wheel barrow', 44), ('Jacket', 50), ('Pet food', 54), ('Car key', 70), ('Diaper', 73), ('Instrument', 80), ('Fruit trees', 94)]
+train_val_test_split: none present - must be created before training
+recommended_task: YOLO object detection (every geometryType found is 'rectangle', i.e. axis-aligned boxes). IMPORTANT: the folder name (e.g. 'Objects__armchairs') is just the source theme/collection, NOT the object's class - real classes are the classTitle fields inside each JSON and multiple unrelated object types can appear in one image (e.g. an 'armchairs' photo also containing annotated Cup, Book, Bed)
+concerns: ['1 of 94 classes have fewer than 20 annotated examples each - too few to train reliably; consider merging into broader categories or dropping them', '9825 images have zero annotated objects - exclude, or use deliberately as hard-negative background examples']
+
+==============================================================================
+DATASET: INDOOR
+==============================================================================
+name: indoor
+path: E:\vinu\AI-Based Object and Text Detection for Visually Impaired People\dataset\indoor
+exists: True
+classes: ['door', 'cabinetDoor', 'refrigeratorDoor', 'window', 'chair', 'table', 'cabinet', 'couch', 'openedDoor', 'pole']
+num_classes: 10
+notes: ['data.yaml paths point at /content/... (a Google Colab path) - must be rewritten to local relative paths before training locally']
+splits: {'train': {'exists': True, 'images': 1012, 'labels': 1008, 'images_without_label': 4, 'labels_without_image': 0, 'empty_label_files_background_images': 116, 'malformed_label_files': []}, 'valid': {'exists': True, 'images': 230, 'labels': 230, 'images_without_label': 0, 'labels_without_image': 0, 'empty_label_files_background_images': 31, 'malformed_label_files': []}, 'test': {'exists': True, 'images': 107, 'labels': 104, 'images_without_label': 3, 'labels_without_image': 0, 'empty_label_files_background_images': 0, 'malformed_label_files': []}}
+class_distribution_all_splits: {'cabinetDoor': 4122, 'door': 610, 'openedDoor': 111, 'table': 315, 'chair': 340, 'refrigeratorDoor': 883, 'window': 557, 'pole': 44, 'cabinet': 263, 'couch': 86}
+format: standard YOLO detection (class cx cy w h, normalized 0-1), Roboflow export layout: train/valid/test each with images/+labels/
+recommended_task: YOLO object detection - cleanest dataset here, ready to train with minimal cleanup
+concerns: ['train: 4 images missing a label file, 0 label files with no matching image', 'test: 3 images missing a label file, 0 label files with no matching image']
+
+==============================================================================
+DATASET: OUTDOOR
+==============================================================================
+name: outdoor
+path: E:\vinu\AI-Based Object and Text Detection for Visually Impaired People\dataset\outdoor
+exists: True
+format: MIXED/inconsistent, three unrelated things share this folder: (1) Day2fog/ and Day2Rainy/ contain paired clear/adverse-weather images (Train A/Train B/Test A/Test B - CycleGAN-style domain-pair layout, NOT annotated for detection); (2) 'XML Files/' contains Pascal VOC XML with polygon+bbox per object; (3) 'labels/' contains YOLO-OBB-style .txt files (class + 8 coords = 4 corner points, 9 fields per line - NOT standard 5-field YOLO detection)
+xml_annotations: {'total_xml_files': 861, 'corrupted_xml_files': [], 'real_classes_found': {'day2 - v3 2025-02-05 12-27pm': 330, 'truck': 143, 'car': 469, 'traffic symbols': 32, 'bus': 9, 'flyover': 97, 'traffic signal': 12, 'bike': 6, 'pedestrian': 27, 'building': 9, 'pole': 160, 'hoarding': 43, 'auto rickshaw': 3, 'caravan': 3}, 'watermark_or_junk_labels_found': {'-': 592, '- collaborate with your team on computer vision projects': 255, 'Roboflow is an end-to-end computer vision platform that helps you': 1722}, 'total_watermark_annotations': 2569, 'total_real_annotations': 1343}
+obb_labels: {'Day': {'files': 280, 'class_id_distribution': {0: 582, 1: 242, 2: 1669, 3: 317}, 'fields_per_line_seen': {9: 2810}}, 'Foggy': {'files': 280, 'class_id_distribution': {0: 9, 1: 511, 2: 3, 3: 159, 4: 3, 5: 48, 6: 9, 7: 104, 8: 54}, 'fields_per_line_seen': {9: 900}}, 'Rainy': {'files': 296, 'class_id_distribution': {0: 3, 1: 6, 2: 9, 4: 346, 5: 3, 6: 73, 8: 48, 9: 27, 10: 170, 11: 6, 12: 24, 13: 6}, 'fields_per_line_seen': {9: 721}}}
+obb_labels_concern: Class ID sets differ across Day/Foggy/Rainy subsets (e.g. Day only uses ids 0-3, Rainy uses 0-13) with no classes.txt/data.yaml found to map ids to names - cannot safely assume the same id means the same real-world class across subsets without additional documentation from whoever exported these.
+weather_pair_images: {'Day2fog': {'Day\\Test A': 50, 'Day\\Train A': 200, 'foggy\\Test B': 50, 'foggy\\Train B': 200}, 'Day2Rainy': {'Day\\Test A': 50, 'Day\\Train A': 200, 'Rainy\\Test B': 52, 'Rainy\\Train B': 200}}
+weather_pair_note: Unannotated paired day/adverse-weather images (domain-transfer style layout) - not usable directly for detection training; only useful for weather-augmentation research or as a source of extra unlabeled images to annotate later
+recommended_task: Object detection IS feasible from 'XML Files/' for real classes: car, pole, truck, flyover, hoarding, traffic symbols, pedestrian, traffic signal, bus, building, bike, caravan, auto rickshaw - after filtering out the watermark/junk labels reported above. The 'labels/' OBB set should NOT be used until its class-id mapping is clarified/documented by whoever produced it.
+concerns: ['2569 annotations in XML Files/ are Roboflow watermark text mistakenly present as object classes - must be filtered before training', 'labels/ (OBB format) has inconsistent, undocumented class-id mappings across Day/Foggy/Rainy', 'No train/val/test split provided for either annotation set', "Real classes with very few examples in XML Files/ (<15): ['bus', 'traffic signal', 'bike', 'building', 'auto rickshaw', 'caravan']"]
+
+Full report written to tools/dataset_report.json

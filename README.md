@@ -1,9 +1,21 @@
-# 👁️ AI-Based Object and Text Detection for Visually Impaired People
+# 👁️ AI-Based Object, Text, Currency and Navigation Assistant for Visually Impaired People
 
 A final-year engineering project that helps visually impaired users
 understand their surroundings using real-time object detection, printed
 text recognition, spoken navigation guidance, and a hands-free voice
 assistant — all running **offline** on a regular laptop with a webcam.
+
+**The app is voice-first and buttonless by design.** Running
+`python app.py` auto-opens the camera, starts text-to-speech, starts
+the microphone, and begins **AUTO ASSISTANCE** immediately — no click
+required. The web pages described below still exist and are fully
+functional, but they are an *optional developer/debugging dashboard*,
+not a requirement for the assistant to work. See
+[Auto-Start / Voice-First Operation](#-auto-start--voice-first-operation).
+
+**No face recognition of any kind is implemented or planned.** The
+system can say "Person ahead." — it will never say a name. See
+[No Face Recognition](#-no-face-recognition-by-design).
 
 ---
 
@@ -11,22 +23,26 @@ assistant — all running **offline** on a regular laptop with a webcam.
 
 | Feature | Description |
 |---|---|
-| 🏠 Home Page | Accessible landing page with large buttons and clear navigation |
-| 📷 Live Camera | Real-time YOLOv8 object detection with bounding boxes + confidence |
+| 🎙️ Auto Assistance | Starts automatically on launch — camera, TTS, mic, detection loop, all with zero clicks |
+| 🧠 Model Router | Loads a real trained model per domain (indoor/household/outdoor/footpath/currency); a domain with no trained model is honestly reported `NOT AVAILABLE`, never silently swapped for a generic COCO model |
+| 🎯 Temporal Confirmation | An object must be seen consistently for several consecutive frames before it's announced — a single noisy misread (e.g. a spinning fan momentarily read as "airplane") is filtered out, never spoken |
+| 📢 Priority Engine + Announcement Manager | Only the single most relevant detection is spoken per cycle (CRITICAL obstacles pre-empt everything else), with cooldowns so the same object isn't repeated every frame |
+| 🏠 Home Page | Optional dashboard landing page with large buttons and clear navigation |
+| 📷 Live Camera | Real-time YOLOv8 object detection with bounding boxes + confidence (dashboard view of the same detection loop driving auto assistance) |
 | 📖 OCR Mode | Capture printed text with EasyOCR, reading-order-sorted, hear it read aloud |
 | ⚠️ Important-Text Priority | Warnings/exits/hazards in OCR text are called out first, not buried |
 | 🧭 Navigation Mode | Left / Center / Right obstacle guidance, spoken instructions |
 | 📏 Monocular Depth Estimation | MiDaS-based relative depth refines "very close" / "farther away" |
 | 🗣️ Scene Summary | On-demand natural-language description of everything currently detected |
 | 🧠 Contextual Memory | "Where is my bag?" — answers from a short-term detection history |
-| 🎙️ Voice Assistant | Hands-free control via microphone commands |
+| 🎙️ Voice Assistant | Hands-free control via microphone commands (this is the primary interface, not a bonus mode) |
 | ✋ Hand Gesture Control | Static gestures (fist, open palm, peace, thumbs up) trigger the same actions as voice |
 | 🤕 Fall Detection (experimental) | Heuristic bounding-box-collapse check with a spoken safety prompt |
 | 🔊 Audio Feedback | Offline pyttsx3 speech, de-duplicated so it doesn't repeat itself |
 | ⚡ Performance | Threaded camera capture, frame-skip, battery saver mode, optional ONNX inference |
-| 📊 System Dashboard | Live FPS/CPU/memory, feature status, and an event log |
+| 📊 System Dashboard | Live FPS/CPU/memory, per-domain model AVAILABLE/NOT AVAILABLE status, feature status, and an event log |
 | 🎨 Color Detection (bonus) | Names the dominant color of a detected object |
-| 💵 Currency Detection (bonus) | Heuristic Indian currency note recognition |
+| 💵 Currency Detection (bonus) | ORB feature-matching against real reference note images in `dataset/currency/` |
 | 🔳 QR Code Reader (bonus) | Detects and reads QR codes aloud |
 | 🆘 Emergency SOS (bonus) | One-tap simulated emergency alert, includes real location if available |
 | 📍 Real GPS (bonus) | Browser Geolocation API reports the visitor's actual location |
@@ -48,8 +64,11 @@ via torch.hub), MediaPipe (hand gestures), OpenCV, pyttsx3, SpeechRecognition
 ```
 AI-Based Object and Text Detection for Visually Impaired People/
 │
-├── app.py                     # Flask app entry point (routes + detection loop)
-├── config.py                  # Central configuration
+├── app.py                     # Entry point: auto_start() runs camera+TTS+mic+detection
+│                               # loop before the Flask dev server even starts listening
+├── config.py                  # Legacy central configuration (weights paths, thresholds)
+├── config/
+│   └── config.yaml            # Pipeline settings: tracking, priority, speech, navigation
 ├── download_weights.py        # Convenience script to fetch yolov8n.pt
 ├── export_onnx.py             # Optional: export YOLOv8 to ONNX for faster CPU inference
 ├── requirements.txt
@@ -60,6 +79,11 @@ AI-Based Object and Text Detection for Visually Impaired People/
 │
 ├── modules/
 │   ├── object_detector.py     # YOLOv8 wrapper (loads .pt or .onnx transparently)
+│   ├── model_router.py        # Per-domain model registry - lazy load, never a silent
+│   │                           # COCO fallback (see Model Router section below)
+│   ├── tracking.py            # Temporal confirmation (IoU tracker) - filters one-frame noise
+│   ├── priority_engine.py     # CRITICAL/HIGH/MEDIUM/LOW tiers, picks the most relevant object
+│   ├── announcement_manager.py# Cooldown/dedup speech gate, CRITICAL interrupts current speech
 │   ├── ocr_reader.py          # EasyOCR wrapper + reading-order sort + keyword priority
 │   ├── speaker.py             # Subprocess-isolated, de-duplicated pyttsx3 TTS
 │   ├── navigation.py          # Left/Center/Right guidance + optional depth-aware distance
@@ -70,7 +94,7 @@ AI-Based Object and Text Detection for Visually Impaired People/
 │   ├── memory.py              # "Where is my X" contextual detection memory
 │   ├── scene_summary.py       # Template-based natural-language scene description
 │   ├── color_detector.py      # (bonus) dominant color naming
-│   ├── currency_detector.py   # (bonus) heuristic currency recognition
+│   ├── currency_detector.py   # (bonus) ORB feature-matching against dataset/currency/
 │   └── qr_reader.py           # (bonus) QR code detection
 │
 ├── utils/
@@ -78,16 +102,38 @@ AI-Based Object and Text Detection for Visually Impaired People/
 │   ├── frame_utils.py         # Resize / JPEG encode / FPS tracker / low-light check
 │   ├── logger.py              # Console logger
 │   ├── event_log.py           # Structured event log powering /dashboard
-│   └── state.py                # Thread-safe shared app state
+│   ├── pipeline_settings.py   # Loads config/config.yaml (lives outside config/ package -
+│   │                           # see the comment in the file for why)
+│   └── state.py                # Thread-safe shared app state (mode, model_status, active_domain...)
 │
-├── templates/                 # Jinja2 pages (Home, Live, OCR, Navigation, Voice, Dashboard, About)
+├── templates/                 # Jinja2 pages - now labelled as the optional dashboard
 ├── static/
 │   ├── css/style.css           # Blue accessibility theme + dark mode
 │   └── js/                     # main.js, camera.js, ocr.js, navigation.js, voice.js, dashboard.js
 │
-├── weights/                    # Place yolov8n.pt here (+ auto-downloaded .onnx/.task files)
-├── dataset/
-│   └── currency/                # Optional reference images for currency detection
+├── tools/
+│   ├── dataset_common.py       # Shared watermark-filtering + VOC-box-conversion helpers
+│   ├── analyze_datasets.py     # Inspects dataset/ and reports real format/classes/counts (read-only)
+│   ├── prepare_datasets.py     # Converts dataset/ -> dataset_prepared/<domain>/ in YOLO format
+│   └── test_false_positives.py # Scripted false-positive/safety-behavior scenarios
+│
+├── training/
+│   ├── train_indoor.py         # Trains models/indoor/best.pt
+│   ├── train_household.py      # Trains models/household/best.pt
+│   ├── train_footpath.py       # Trains models/footpath/best.pt
+│   └── train_outdoor.py        # Documents WHY outdoor can't train yet (no source images)
+│
+├── weights/                    # Generic COCO yolov8n.pt (DEVELOPMENT_MODE only, never production)
+├── models/                     # Per-domain trained weights - models/<domain>/best.pt
+│   ├── indoor/ household/ outdoor/ road_hazards/ currency/ footpath/
+├── dataset/                    # Real source datasets (never modified/reorganized by any tool)
+│   ├── currency/                # Reference note images (ORB matching, not a trainable set)
+│   ├── Footpath/                # Pascal VOC XML, single class "footpath"
+│   ├── household/                # Supervisely JSON, 138 theme folders, 94 classes
+│   ├── indoor/                   # Roboflow YOLO export, 10 classes, train/valid/test
+│   └── outdoor/                  # Pascal VOC XML (13 real classes) + unpaired OBB labels
+├── dataset_prepared/            # Generated by tools/prepare_datasets.py - git-ignored, YOLO-ready
+├── runs/                        # Ultralytics training run output (results.csv, PR curves, etc.)
 ├── logs/                        # Structured event log output (git-ignored)
 ├── screenshots/                 # Add demo screenshots here
 └── tests/                       # Unit tests (no camera/mic required)
@@ -181,7 +227,16 @@ Then open **http://127.0.0.1:5000** in your browser.
 
 ## ▶️ How to Use
 
-1. **Home** — click "Start Camera" or "Voice Assistant" to jump right in.
+**None of the steps below are required to get assistance** — `python
+app.py` already starts the camera, TTS, mic, and AUTO ASSISTANCE by
+itself (see [Auto-Start / Voice-First Operation](#-auto-start--voice-first-operation)).
+What follows documents the **optional dashboard** pages, for anyone
+who wants to see/demo what the assistant is doing, and the voice
+commands that work regardless of whether the dashboard is ever opened.
+
+1. **Home** — optional dashboard landing page; "Start Camera"/"Voice
+   Assistant" buttons here just give a visual window into the same
+   auto-started camera/mic, not a way to turn them on.
 2. **Live Camera** — click **Start Camera**, choose a mode (Object /
    Color / QR Code), and detected items are spoken aloud as they appear.
    - **💵 Detect Currency** to scan a note (needs reference images —
@@ -226,15 +281,252 @@ Then open **http://127.0.0.1:5000** in your browser.
 
 ---
 
+## 🎙️ Auto-Start / Voice-First Operation
+
+Running `python app.py` does all of the following **before you touch
+anything**:
+
+1. Scans `models/<domain>/best.pt` for every domain and honestly logs
+   which are `AVAILABLE` vs `NOT AVAILABLE` (see [Model Router](#-model-router--no-silent-coco-fallback)).
+2. Opens the default camera.
+3. Starts the background detection loop, which runs temporal
+   confirmation ([modules/tracking.py](modules/tracking.py)) and the
+   priority engine ([modules/priority_engine.py](modules/priority_engine.py))
+   on every frame.
+4. Starts the microphone / voice-command listener.
+5. Speaks **"AI assistance started."** and begins **AUTO ASSISTANCE**
+   — the assistant proactively announces the single most relevant
+   thing in front of the camera (never everything at once - see
+   [Priority Engine + Announcement Manager](#-priority-engine--announcement-manager)),
+   using whichever domain model is available (indoor → household →
+   outdoor, in that priority order, per `AUTO_DOMAIN_PRIORITY` in `app.py`).
+
+No page load, no click, and no keyboard input is required for any of
+this. The Flask server that starts afterward (`http://127.0.0.1:5000`)
+exposes the exact same running state as an **optional** visual
+dashboard - useful for demoing/debugging what the assistant is
+currently seeing and saying - not as a prerequisite for the assistant
+to function. Voice commands (see [How to Use](#️-how-to-use), step 5)
+work identically whether or not anyone ever opens the dashboard.
+
+If **no** domain model is available yet (a fresh checkout before any
+training has been run), the app still auto-starts everything except
+detection announcements, and says so honestly rather than silently
+running a generic COCO model — see the next section.
+
+---
+
+## 🧠 Model Router — No Silent COCO Fallback
+
+[`modules/model_router.py`](modules/model_router.py) is the single
+place that decides which weights file backs each domain
+(`indoor`, `household`, `outdoor`, `road_hazards`, `currency`,
+`footpath`). Its rule, enforced in code, not just documentation:
+
+> **A domain with no trained `models/<domain>/best.pt` is reported
+> `NOT AVAILABLE` and stays disabled. It is never silently replaced by
+> the generic COCO-pretrained `yolov8n.pt`.**
+
+A generic COCO detector can still be loaded for manual
+development/testing via `get_development_coco_detector()` — but only
+if the `DEVELOPMENT_MODE=1` environment variable is set explicitly;
+without it, calling that method raises instead of running, so
+production code paths can never reach it by accident.
+
+Check what's currently available:
+```bash
+python -c "from modules.model_router import router; print(router.status_report())"
+```
+or watch the app's own startup log, or open the dashboard's home page
+(model status is included in the `/detections` API response as
+`model_status` / `active_domain`).
+
+**Two of the six listed domains need a caveat, to avoid the status
+report being misread:**
+- **`currency`** will always show `NOT AVAILABLE` here - there is no
+  trained YOLO classifier for it. Currency detection still genuinely
+  works, but through a completely separate, pre-existing code path
+  (`modules/currency_detector.py`, ORB feature-matching against
+  `dataset/currency/*.png`) that never goes through `model_router` at
+  all. `NOT AVAILABLE` here means "no trained currency *object
+  detector* exists," not "currency detection doesn't work."
+- **`road_hazards`** is a placeholder domain slot with no dataset, no
+  prepare/train script, and no `AUTO_DOMAIN_PRIORITY` entry yet - none
+  of the 5 real datasets under `dataset/` map cleanly to it today
+  (the closest candidate, pothole/speed-breaker classes, isn't present
+  in any of them - see [Final Status Report](#-final-status-report)).
+  It's listed now so the router's shape doesn't need to change later.
+
+**Scope note:** this no-silent-fallback rule governs `mode == "auto"`
+— the actual AUTO ASSISTANCE announcement path (`app.py`'s detection
+loop, gated through `model_router.get_detector(active_domain)` only).
+The dashboard's manual **Live Camera → Object** mode is a separate,
+pre-existing, clearly-optional demo view that still uses the generic
+`yolov8n.pt` via `get_detector()` — this is a deliberate, documented
+choice (a general-purpose demo of the underlying detector, not a
+disguised substitute for a missing domain model) rather than an
+oversight, and it never runs during unattended auto-assistance.
+
+---
+
+## 🎯 Temporal Confirmation & 📢 Priority Engine + Announcement Manager
+
+Two problems a raw per-frame YOLO announcement loop has in practice:
+
+1. **Single-frame misclassification.** A spinning ceiling fan can, for
+   one noisy frame, score higher for "airplane" than for its real
+   class. Announcing every single frame's raw detections would say
+   "airplane" out loud from a false positive most detectors produce
+   occasionally.
+2. **Announcement spam.** With a person standing in frame, a raw loop
+   says "Person ahead" 20+ times a second - useless and actively
+   dangerous if it drowns out something newly relevant.
+
+[`modules/tracking.py`](modules/tracking.py)'s `ObjectTracker` fixes
+(1): a detection only becomes "confirmed" after appearing in
+`min_consecutive_frames` (default 4, `config/config.yaml` →
+`tracking.minimum_frames`) consecutive frames, matched frame-to-frame
+by label + IoU overlap. A one-frame "airplane" blip never reaches 4
+consecutive frames and is never spoken. See
+[`tools/test_false_positives.py`](tools/test_false_positives.py)
+Scenario 1 for this exact case, verified against the real module.
+
+[`modules/priority_engine.py`](modules/priority_engine.py) fixes (2)
+from the other direction: every confirmed detection is classified into
+a `CRITICAL` / `HIGH` / `MEDIUM` / `LOW` tier (obstacles that block the
+path or are very close outrank everything else), and
+`select_most_relevant()` picks exactly one candidate per cycle.
+[`modules/announcement_manager.py`](modules/announcement_manager.py)
+then applies a per-object cooldown (default 6s) so that one candidate
+isn't repeated every cycle either — except `CRITICAL` announcements,
+which interrupt whatever is currently being spoken (`speaker.stop()`)
+regardless of cooldown, since an active hazard must never wait behind
+an unrelated sentence.
+
+When nothing is confidently recognized, the assistant says **"Object
+not clearly recognized."** — a fixed, honest phrase — rather than
+guessing a label with low confidence.
+
+---
+
+## 🚫 No Face Recognition, By Design
+
+This project deliberately implements **zero** face recognition, face
+identification, face embeddings, or any form of "who is this person"
+capability - and never will. Verified by grepping the entire codebase
+for `face_recognition`, `deepface`, `facenet`, `dlib` face-encoding
+APIs, and any local "known faces" database: none exist.
+
+The generic object detector can and does say **"Person ahead."** when
+a person is confidently, temporally-confirmed detected — that's a
+normal COCO/custom-model object class like any other. It will never
+say a name, because there is no code path anywhere that could produce
+one.
+
+---
+
+## 📊 Dataset Pipeline
+
+Real datasets already exist under `dataset/` — `currency/`,
+`Footpath/`, `household/`, `indoor/`, `outdoor/`. Two tools work
+against them, in order, and **neither ever renames, deletes, moves, or
+reorganizes anything inside `dataset/`** — both are strictly read +
+write-elsewhere:
+
+### 1. Analyze (read-only)
+
+```bash
+python tools/analyze_datasets.py --json tools/dataset_report.json
+```
+
+Inspects each dataset's actual on-disk format (no assumptions) and
+reports image/annotation counts, the real class list, splits, and data
+quality problems (missing labels, watermark/junk classes, empty
+annotations). Findings that mattered for this project, and directly
+contradicted some initial assumptions:
+
+- **Footpath is bounding-box object detection, not segmentation** —
+  every XML has `<segmented>0</segmented>` despite the folder name.
+- **household is rich multi-class object detection (94 real classes:
+  Shoe, Cup, Cooking pot, Hand, Toothbrush, Plate, ...), not simple
+  per-folder image classification** — the theme folder name (e.g.
+  `Objects__armchairs`) is only the photo's *source collection*, not
+  the object's label; several unrelated classes are annotated per photo.
+- **outdoor's `XML Files/` mixes 1,013 real annotations (car, pole,
+  truck, flyover, hoarding, traffic symbols, pedestrian, ...) with
+  2,899 Roboflow watermark/version-label annotations** that must be
+  filtered out before training (see `tools/dataset_common.py`).
+- **outdoor's `labels/` OBB set has undocumented, inconsistent
+  class-id mappings** across its Day/Foggy/Rainy subsets (Day uses ids
+  0-3, Rainy uses ids 0-13, no `classes.txt` anywhere) — not used for
+  training until that's resolved.
+
+### 2. Prepare (writes only to `dataset_prepared/`)
+
+```bash
+python tools/prepare_datasets.py --dataset indoor
+python tools/prepare_datasets.py --dataset footpath
+python tools/prepare_datasets.py --dataset household --min-class-count 20 --max-images 6000
+python tools/prepare_datasets.py --dataset outdoor
+python tools/prepare_datasets.py --dataset all
+```
+
+Converts each dataset's real, native format into a standard YOLO
+layout (`dataset_prepared/<domain>/{train,val}/{images,labels}` +
+`data.yaml`), filtering out watermark/junk classes and rare classes
+(`--min-class-count`, default 20 examples) along the way. `dataset/`
+itself is never touched — confirmed by every prepare function copying
+files into `dataset_prepared/`, never writing back.
+
+---
+
+## 🏋️ Model Training
+
+Each trainable domain has its own script under `training/`, run after
+the matching `prepare_datasets.py` step:
+
+```bash
+python training/train_indoor.py     [--epochs 30] [--imgsz 640] [--batch 16]
+python training/train_footpath.py   [--epochs 50]   # small dataset, heavier augmentation
+python training/train_household.py  [--epochs 25] [--imgsz 416]
+python training/train_outdoor.py    # does NOT train - explains why, see below
+```
+
+All start from `yolov8n.pt` as a transfer-learning backbone (standard
+practice — the pretrained COCO weights are a generic feature-extractor
+starting point, not used for inference) and fine-tune entirely on the
+domain's own real classes. Each prints real, measured
+precision/recall/mAP50/mAP50-95 from `model.val()` on a held-out split
+— never a fabricated or assumed number — and copies the trained
+`best.pt` to `models/<domain>/best.pt`, where `model_router.py` picks
+it up automatically on the app's next restart.
+
+See [Final Status Report](#-final-status-report) for this project's
+actual, currently-measured results per domain, including what's
+**not** trainable yet and why.
+
+---
+
 ## 🧪 How to Test
 
 Automated unit tests cover the pure-logic modules (navigation heuristics
 including depth-aware distance, color naming, QR/currency wrappers,
 fall detection, contextual memory, scene summary, OCR reading order and
-keyword priority) without needing a camera, GPU, or microphone:
+keyword priority, temporal tracking, priority engine, announcement
+manager, model router, pipeline settings) without needing a camera,
+GPU, or microphone:
 
 ```bash
 python -m unittest discover -s tests -v
+```
+
+Scripted false-positive / safety-behavior scenarios (the fan/airplane
+single-frame-misread case, cooldown/CRITICAL-interrupt behavior, the
+model router's no-silent-fallback guarantee, priority-tier ordering)
+against the real modules, with a readable PASS/FAIL report:
+
+```bash
+python tools/test_false_positives.py
 ```
 
 **Manual end-to-end test checklist:**
@@ -477,6 +769,136 @@ MJPEG stream, in-memory state shared across requests) and ships with
 serverless function bundle. Use Render (or any host that runs a
 persistent Python process - Railway, Fly.io, a plain VPS, etc.)
 instead.
+
+---
+
+## 📋 Final Status Report
+
+Honest, per-domain status as actually built and measured against this
+project's real datasets - no invented classes, no assumed accuracy.
+`tools/dataset_report.json` (from `tools/analyze_datasets.py`) backs
+every count below; training numbers come from each `training/train_*.py`
+script's own `model.val()` output, never hand-typed.
+
+> **Training status:** all three trainable domains (indoor, footpath,
+> household) have been trained and validated with real measurements -
+> no numbers below are estimated or assumed. Household ran 8 epochs
+> instead of the script's default 25 (measured at ~942s/epoch on this
+> CPU - 93 classes × 5,400 images is far heavier than indoor's 10
+> classes × 1,012 images - so 25 epochs would have taken ~6.5 hours;
+> 8 was a disclosed, honest scope reduction to fit a reasonable
+> session, not a hidden shortcut). `training/train_household.py
+> --epochs 25` (or higher) remains available for anyone with more CPU
+> time or a GPU, and should improve on the numbers below - household's
+> mAP50 was still climbing at a steady, unplateaued rate through all 8
+> epochs (0.054 -> 0.225), unlike indoor/footpath which were closer to
+> convergence by the time training stopped.
+
+### Domain-by-domain
+
+| Domain | Dataset | Status | Notes |
+|---|---|---|---|
+| **indoor** | 1,012 train / 230 val / 107 test images, 10 classes (door, cabinetDoor, refrigeratorDoor, window, chair, table, cabinet, couch, openedDoor, pole) | ✅ TRAINED | 20 epochs, `yolov8n.pt` base, CPU, imgsz 416. **Real measured validation results: mAP50 = 0.456, mAP50-95 = 0.303, precision = 0.672, recall = 0.430** (230 val images, 1,289 instances) - see per-class breakdown below. |
+| **household** | 5,400 train / 600 val images (capped from 27,519 real photos), 93 classes (Shoe, Cup, Cooking pot, Hand, Toothbrush, Plate, Toy, Cutlery, Book, Power outlet, ...) | ✅ TRAINED (reduced scope) | 8 epochs (scoped down from 25 - see note above), `yolov8n.pt` base, CPU, imgsz 416. **Real measured validation results: mAP50 = 0.226, mAP50-95 = 0.151, precision = 0.523, recall = 0.233** (600 val images). Still improving steadily at epoch 8, not converged - expect meaningfully better numbers from `--epochs 25`+. 1 class ("Cleaning floor", 3 examples) dropped for having fewer than 20 examples. Per-class breakdown across 93 classes is too large for this table - see `runs/household/train/confusion_matrix.png` and `results.csv` for the full picture; rarest classes (near the 20-example minimum) are expected to be weakest. |
+| **footpath** | 40 train / 9 val images, 1 class (footpath) | ✅ TRAINED | Stopped early at epoch 17/50 (`patience=15` - no improvement since epoch 2, exactly as configured). **Real measured validation results: mAP50 = 0.573, mAP50-95 = 0.375, recall = 0.900, precision = 0.003** (9 val images, 10 instances). The very low precision alongside high recall is a real, honest signature of overfitting on ~50 images - the model finds real footpath regions (high recall) but also throws a lot of spurious low-confidence boxes (YOLO's `val()` sweeps confidence thresholds for the mAP curve, which is why precision looks this extreme at the reported operating point). Treat this model as a proof-of-concept only - see Remaining Work. Two corrupt JPEGs in the val split were auto-repaired by Pillow/OpenCV during validation, a genuine data-quality issue worth fixing at the source. |
+| **outdoor** | 861 real XML annotations (1,013 objects after stripping 2,899 watermark labels), 13 classes (car, pole, truck, flyover, hoarding, traffic symbols, pedestrian, traffic signal, bus, building, bike, auto rickshaw, caravan) | 🔴 NOT TRAINABLE | **Zero source images exist for any of the 861 annotated XML files anywhere in `dataset/`.** See `training/train_outdoor.py` for the full explanation and what's needed to unblock it. |
+| **currency** | 6 reference images (one per denomination) | 🟢 WORKING (not a trained model) | ORB feature-matching (`modules/currency_detector.py`), not YOLO - reports "not recognized" honestly on a miss rather than guessing. |
+| **road_hazards** | — | ⚪ NOT STARTED | Placeholder domain slot only - no dataset maps to it yet; see the Model Router section above. |
+
+### indoor per-class validation results (real, from `model.val()`)
+
+| Class | Val images | Val instances | Precision | Recall | mAP50 | mAP50-95 |
+|---|---|---|---|---|---|---|
+| cabinetDoor | 99 | 765 | 0.803 | 0.661 | 0.769 | 0.428 |
+| refrigeratorDoor | 85 | 192 | 0.668 | 0.807 | 0.767 | 0.516 |
+| chair | 24 | 49 | 0.701 | 0.526 | 0.584 | 0.299 |
+| door | 63 | 97 | 0.551 | 0.423 | 0.471 | 0.283 |
+| cabinet | 28 | 32 | 0.493 | 0.406 | 0.414 | 0.299 |
+| window | 39 | 91 | 0.511 | 0.352 | 0.316 | 0.194 |
+| table | 30 | 40 | 0.323 | 0.125 | 0.150 | 0.082 |
+| couch | 1 | 1 | 0.671 | 1.000 | 0.995 | 0.895 |
+| openedDoor | 13 | 13 | 1.000 | 0.000 | 0.073 | 0.031 |
+| pole | 4 | 9 | 1.000 | 0.000 | 0.020 | 0.005 |
+
+**Read this honestly, not optimistically:** `cabinetDoor`,
+`refrigeratorDoor`, and `chair` are genuinely reliable (enough
+validation instances, solid mAP50). `couch` (1 instance),
+`openedDoor` (13 instances), and `pole` (9 instances) have too few
+validation examples for their metrics to mean anything - `pole`'s
+0.020 mAP50 reflects the model essentially never detecting it
+correctly at this training budget, not a class that's somehow "5%
+accurate" in any meaningful sense. More images for the underrepresented
+classes (openedDoor, pole, couch, table) is the clear next step for
+this domain, not more epochs on the current data.
+
+### MISSING CLASS report
+
+**MISSING CLASS: fan**
+**RECOMMENDATION:** Add a custom dataset for fan (photos of ceiling
+fans / table fans from varied angles, labeled `fan`, merged into the
+indoor or household training set). Verified absent by searching every
+class name in `tools/dataset_report.json` across all 5 datasets -
+"fan" does not appear anywhere. This is the exact failure case the
+temporal-confirmation tracker (`modules/tracking.py`) is designed to
+contain: without a trained `fan` class, a spinning fan cannot be
+correctly announced as "fan," but the tracker's consecutive-frame
+requirement stops it from being mis-announced as something else
+(e.g. "airplane") off a single noisy frame either - see
+`tools/test_false_positives.py` Scenario 1.
+
+### What's WORKING right now
+
+- Auto-start / voice-first operation (camera, TTS, mic, AUTO ASSISTANCE
+  with zero clicks) - verified live.
+- Honest model-router status reporting (no domain silently substitutes
+  COCO) - verified via `tools/test_false_positives.py`.
+- Temporal confirmation, priority engine, announcement manager (cooldowns,
+  CRITICAL interrupts, honest "not clearly recognized") - all 34 unit
+  tests + 11 scripted scenarios passing.
+- Dataset analysis/preparation tooling for all 5 real datasets.
+- OCR, navigation (+ optional MiDaS depth), voice assistant, gesture
+  control, scene summary, contextual memory, fall detection, currency
+  (ORB), QR, SOS, real GPS, battery saver - all pre-existing features,
+  unaffected by this phase's changes, still covered by their own unit
+  tests.
+- No face recognition anywhere - verified by full-codebase search.
+
+### Remaining Work
+
+1. **Train household further** - `models/household/best.pt` exists and
+   works, but only 8 epochs were run (see the scope-reduction note
+   above); mAP50 was still climbing steadily, not plateaued, so
+   `training/train_household.py --epochs 25` (or more) on a faster
+   machine/GPU should meaningfully improve on 0.226 mAP50.
+2. **Collect more footpath images.** ~50 source images produced a
+   model that overfits (0.9 recall but 0.003 precision at `val()`'s
+   reported operating point) - more images from varied locations/
+   lighting is the fix, not more epochs on the same 50.
+3. **Fix the 2 corrupt JPEGs** found in `dataset/Footpath/footpath_images/`
+   during validation (auto-repaired at load time by Pillow/OpenCV, but
+   worth fixing at the source).
+4. **Improve indoor's underrepresented classes** (`openedDoor`: 13
+   instances, `pole`: 9, `couch`: 1) - their mAP50/mAP50-95 numbers
+   reflect too little validation data to be meaningful, not a model
+   that's "somehow bad at doors." More images for exactly these classes
+   is the highest-value next step for indoor.
+5. **Add a `fan` class** to indoor or household training data - see
+   MISSING CLASS report above.
+6. **Unblock outdoor training** - either capture/source real photos to
+   pair with the existing 861 XML annotations, or obtain the
+   Day/Foggy/Rainy `labels/` OBB set's class-id-to-name mapping from
+   whoever produced it.
+7. **`road_hazards` domain** - currently just a placeholder slot; no
+   dataset maps to it yet (closest candidate, pothole/speed-breaker
+   classes, isn't present in any of the 5 real datasets).
+8. **Currency**: current ORB matching is lighting/angle-sensitive by
+   nature; a trained classifier (once enough real photos per
+   denomination exist, not just 1 reference image each) would be more
+   robust - see `dataset/currency/README.md`.
+9. **household's rarest classes** (several sit right at the 20-example
+   minimum) will likely have weak per-class accuracy - check
+   `runs/household/train/confusion_matrix.png` once trained before
+   trusting them individually.
 
 ---
 

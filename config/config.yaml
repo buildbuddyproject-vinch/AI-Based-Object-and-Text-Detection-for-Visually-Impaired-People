@@ -1,0 +1,58 @@
+# Configuration for the multi-domain assistive vision pipeline
+# (household / indoor / outdoor / road hazards / currency / footpath +
+# tracking / speech / navigation). Loaded by config/config_loader.py.
+#
+# NOTE: the original single-domain web app (app.py, config.py) has its
+# own separate config.py and is unaffected by this file - this is
+# specifically for the new multi-model auto-assistance pipeline
+# described in modules/model_router.py, modules/tracking.py, etc.
+# See README.md for how the two fit together.
+
+camera:
+  width: 640
+  height: 480
+  fps: 15
+  source: 0
+
+models:
+  # Paths are relative to the project root. A domain whose file doesn't
+  # exist is simply reported NOT AVAILABLE and disabled - never
+  # silently replaced with a generic COCO model (see model_router.py).
+  household: models/household/best.pt
+  indoor: models/indoor/best.pt
+  outdoor: models/outdoor/best.pt
+  road_hazards: models/road_hazards/best.pt
+  currency: models/currency/best.pt
+  footpath: models/footpath/best.pt
+  depth: null  # MiDaS is downloaded via torch.hub, not a local file - see modules/depth_estimator.py
+
+confidence:
+  household: 0.45
+  indoor: 0.45
+  outdoor: 0.45
+  hazard: 0.5
+  currency: 0.6
+
+tracking:
+  minimum_frames: 4        # min_consecutive_frames before a detection is "confirmed"
+  position_tolerance: 0.3  # IoU match threshold between frames
+  stale_after_seconds: 1.5
+  cooldown: 6.0             # announcement_manager default cooldown, seconds
+
+speech:
+  rate: 170
+  volume: 1.0
+
+navigation:
+  near_threshold: 0.18        # bbox_area / frame_area above this => "close" (no depth model)
+  very_near_threshold: 0.35   # above this => CRITICAL priority escalation
+  depth_near_percentile: 85   # MiDaS relative-depth percentile treated as "very close"
+  depth_far_percentile: 50    # ... and below this treated as "farther away"
+
+scene:
+  stability_frames: 5   # how many consecutive frames of the same dominant scene type
+                          # before switching which domain model(s) are actively run -
+                          # avoids flapping between household/indoor/outdoor every frame
+
+unknown_object:
+  announcement_cooldown: 15.0  # seconds between repeats of "Object not clearly recognized."

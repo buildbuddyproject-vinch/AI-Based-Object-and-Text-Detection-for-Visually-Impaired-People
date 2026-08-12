@@ -17,6 +17,27 @@ dataset/currency/*
 !dataset/currency/.gitkeep
 !dataset/currency/README.md
 
+# Raw training datasets (Footpath/household/indoor/outdoor) - 5.5+ GB
+# combined, real user-supplied data that must stay on the machine that
+# trains, not in git history. tools/analyze_datasets.py and
+# tools/prepare_datasets.py read these directly from disk and never
+# modify them - see README.md -> "Dataset Pipeline" for how to obtain/
+# regenerate what's needed instead of committing it.
+dataset/Footpath/
+dataset/household/
+dataset/indoor/
+dataset/outdoor/
+
+# Generated YOLO-ready data (tools/prepare_datasets.py output) -
+# entirely regenerable from dataset/, and large (1+ GB) - never commit.
+dataset_prepared/
+
+# Ultralytics training run artifacts (sample batches, PR/F1 curves,
+# confusion matrices, per-epoch checkpoints) - regenerable by re-running
+# training/train_<domain>.py; only the final models/<domain>/best.pt
+# this produces is committed, not the whole run directory.
+runs/
+
 # EasyOCR / torch hub / model caches if run inside the repo
 .EasyOCR/
 .cache/

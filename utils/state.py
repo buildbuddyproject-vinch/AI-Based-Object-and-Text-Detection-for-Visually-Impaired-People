@@ -16,7 +16,23 @@ class AppState:
 
         # camera / detection
         self.camera_active = False
-        self.mode = "object"  # object | navigation | color | qr
+        # "auto" (default - voice-first auto-assistance using
+        # model_router's domain-specific custom models, temporal
+        # confirmation, priority engine, and announcement manager) or
+        # one of the original single-domain developer/debugging modes:
+        # object | navigation | color | qr
+        self.mode = "auto"
+        # Populated at startup from ModelRouter.status_report() - which
+        # domain models actually loaded vs are missing (Section 43).
+        self.model_status = {}
+        # Which domain's custom model is currently driving auto-assistance
+        # detection, e.g. "indoor" - None if no custom model is available
+        # yet (auto-assistance stays honestly silent rather than
+        # silently substituting a generic COCO model).
+        self.active_domain = None
+        # The last thing auto-assistance actually said out loud, purely
+        # for the developer dashboard to display.
+        self.last_auto_announcement = ""
         self.detections = []
         self.navigation_instruction = "Path looks clear."
         self.zone_map = {"left": [], "center": [], "right": []}
@@ -128,6 +144,9 @@ class AppState:
                 "fall_detected": self.fall_detected,
                 "gesture_active": self.gesture_active,
                 "last_gesture": self.last_gesture,
+                "model_status": dict(self.model_status),
+                "active_domain": self.active_domain,
+                "last_auto_announcement": self.last_auto_announcement,
             }
 
 

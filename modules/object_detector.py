@@ -55,9 +55,14 @@ class ObjectDetector:
                 })
         return detections
 
-    def draw_boxes(self, frame, detections):
+    @staticmethod
+    def draw_boxes(frame, detections):
         """Draw bounding boxes + label/confidence text onto `frame`
-        in-place and return it."""
+        in-place and return it. Static because it's pure drawing logic
+        (no model weights involved) - callers can use it without
+        needing any particular detector loaded, e.g. auto-assistance
+        mode drawing boxes from whichever domain model is active
+        without also having to load the generic COCO model."""
         for det in detections:
             x1, y1, x2, y2 = det["bbox"]
             color = (66, 135, 245)  # accessible blue, BGR

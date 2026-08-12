@@ -35,6 +35,11 @@ from modules.memory import memory
 from modules.scene_summary import build_scene_summary
 from modules.fall_detector import FallDetector
 from modules.gesture_recognizer import GESTURE_ACTIONS
+from modules.tracking import ObjectTracker
+from modules.priority_engine import select_most_relevant, classify_priority
+from modules.announcement_manager import AnnouncementManager
+from modules.model_router import router as model_router
+from utils.pipeline_settings import settings as pipeline_settings
 
 log = get_logger()
 
@@ -71,6 +76,43 @@ voice_listener = VoiceCommandListener(
     on_log=lambda msg: state.log_voice(msg),
     is_speaking_check=lambda: speaker.is_speaking,
 )
+
+# --- Auto-assistance pipeline (Sections 12/25/26/33 of the master spec) ---
+# Temporal confirmation -> priority engine -> announcement manager,
+# driven by whichever domain model model_router actually has available.
+# Never falls back to the generic COCO model in production - see
+# modules/model_router.py.
+_tracking_cfg = pipeline_settings["tracking"]
+object_tracker = ObjectTracker(
+    min_confidence=0.4,
+    min_consecutive_frames=_tracking_cfg["minimum_frames"],
+    iou_match_threshold=_tracking_cfg["position_tolerance"],
+    stale_after_seconds=_tracking_cfg["stale_after_seconds"],
+)
+announcer = AnnouncementManager(
+    speaker,
+    cooldown_seconds=_tracking_cfg["cooldown"],
+    unknown_object_cooldown=pipeline_settings["unknown_object"]["announcement_cooldown"],
+)
+
+# Domains tried in this order when picking which custom model drives
+# auto-assistance - first one that's actually AVAILABLE wins. Voice
+# commands can still switch state.mode away from "auto" at any time.
+AUTO_DOMAIN_PRIORITY = ["indoor", "household", "outdoor"]
+
+
+def refresh_model_status():
+    """Recompute which domain models are available and pick the active
+    one for auto-assistance mode. Safe to call again later if models
+    get trained/placed while the app is running."""
+    state.model_status = model_router.status_report()
+    state.active_domain = next(
+        (d for d in AUTO_DOMAIN_PRIORITY if model_router.is_available(d)), None
+    )
+    return state.active_domain
+
+
+refresh_model_status()
 
 _detection_thread = None
 _previous_labels = set()
@@ -190,6 +232,8 @@ def start_camera():
     _last_nav_instruction = None
     _pending_nav_instruction = None
     _pending_nav_since = 0.0
+    object_tracker.reset()
+    announcer.reset()
 
     if _detection_thread is None or not _detection_thread.is_alive():
         _detection_thread = threading.Thread(target=_detection_loop, daemon=True)
@@ -233,27 +277,51 @@ def _detection_loop():
         mode = state.mode
         now = time.time()
 
-        try:
-            detections = get_detector().detect(proc_frame)
-        except Exception as exc:
-            log.error("Detection error: %s", exc)
+        if mode == "auto":
+            # Auto-assistance: only ever uses a domain-specific custom
+            # model via model_router - never the generic COCO detector
+            # (Section 9/43). If no custom model is available yet,
+            # detections simply stay empty rather than silently
+            # substituting something misleading.
             detections = []
-
-        if mode == "color":
-            for det in detections:
-                det["color"] = detect_dominant_color(proc_frame, det["bbox"])
-        elif mode == "qr":
+            active_domain = state.active_domain
+            if active_domain:
+                auto_detector = model_router.get_detector(active_domain)
+                if auto_detector is not None:
+                    try:
+                        detections = auto_detector.detect(proc_frame)
+                    except Exception as exc:
+                        log.error("Auto-assistance detection error (%s): %s", active_domain, exc)
+                        detections = []
+                else:
+                    # The model just failed to load - re-scan so
+                    # active_domain/model_status reflect reality
+                    # instead of retrying every single frame.
+                    refresh_model_status()
+            annotated = ObjectDetector.draw_boxes(proc_frame.copy(), detections)
+        else:
             try:
-                qr_results = get_qr_reader().read(proc_frame)
+                detections = get_detector().detect(proc_frame)
             except Exception as exc:
-                log.error("QR read error: %s", exc)
-                qr_results = []
-            state.last_qr = qr_results
-            for qr in qr_results:
-                speaker.speak(f"QR code found: {qr['data']}", dedup_key=f"qr:{qr['data']}")
-                event_log.record("qr_detected", data=qr["data"])
+                log.error("Detection error: %s", exc)
+                detections = []
 
-        annotated = get_detector().draw_boxes(proc_frame.copy(), detections)
+            if mode == "color":
+                for det in detections:
+                    det["color"] = detect_dominant_color(proc_frame, det["bbox"])
+            elif mode == "qr":
+                try:
+                    qr_results = get_qr_reader().read(proc_frame)
+                except Exception as exc:
+                    log.error("QR read error: %s", exc)
+                    qr_results = []
+                state.last_qr = qr_results
+                for qr in qr_results:
+                    speaker.speak(f"QR code found: {qr['data']}", dedup_key=f"qr:{qr['data']}")
+                    event_log.record("qr_detected", data=qr["data"])
+
+            annotated = get_detector().draw_boxes(proc_frame.copy(), detections)
+
         h, w = proc_frame.shape[:2]
 
         # --- Monocular depth estimation (navigation mode only, ------------
@@ -326,7 +394,37 @@ def _detection_loop():
                         handler()
 
         # --- Spoken feedback -------------------------------------------------
-        if mode == "navigation":
+        if mode == "auto":
+            # Temporal confirmation -> priority engine -> announcement
+            # manager (Sections 12/25/26). A detection only becomes
+            # eligible for speech after appearing consistently for
+            # several consecutive frames, and even then only the single
+            # most relevant one gets spoken - never every detection,
+            # every frame.
+            confirmed = object_tracker.update(detections, now=now)
+            candidates = []
+            for track in confirmed:
+                x1, y1, x2, y2 = track.bbox
+                area_ratio = max(0, x2 - x1) * max(0, y2 - y1) / max(1, w * h)
+                candidates.append({
+                    "label": track.label,
+                    "area_ratio": area_ratio,
+                    "is_very_close": area_ratio >= pipeline_settings["navigation"]["very_near_threshold"],
+                })
+            primary = select_most_relevant(candidates)
+            if primary:
+                tier = primary.get("tier") or classify_priority(primary["label"], primary["is_very_close"])
+                text = f"{primary['label'].capitalize()} ahead."
+                if announcer.announce(text, key=f"auto:{primary['label']}", tier=tier):
+                    state.last_auto_announcement = text
+                    event_log.record("auto_announcement", text=text, tier=tier,
+                                      domain=state.active_domain)
+            elif detections and not confirmed:
+                # Something was detected but never stabilized into a
+                # confirmed track - Section 40 prefers honest
+                # uncertainty over a confident-sounding wrong guess.
+                announcer.announce_unknown()
+        elif mode == "navigation":
             # Bounding boxes flicker frame-to-frame (detection noise can
             # briefly swap which object is "primary"), which used to
             # trigger a burst of rapid-fire speech - fast enough to
@@ -574,13 +672,16 @@ def api_set_mode():
     global _previous_labels, _last_nav_instruction, _pending_nav_instruction, _pending_nav_since
     data = request.get_json(force=True, silent=True) or {}
     mode = data.get("mode", "object")
-    if mode not in ("object", "navigation", "color", "qr"):
+    if mode not in ("auto", "object", "navigation", "color", "qr"):
         return jsonify({"success": False, "error": "invalid mode"}), 400
     state.mode = mode
     _previous_labels = set()
     _last_nav_instruction = None
     _pending_nav_instruction = None
     _pending_nav_since = 0.0
+    if mode == "auto":
+        object_tracker.reset()
+        announcer.reset()
     event_log.record("mode_change", mode=mode, via="ui")
     return jsonify({"success": True, "mode": mode})
 
@@ -775,6 +876,12 @@ def api_metrics():
         "memory_mb": memory_mb,
         "event_counters": event_log.counters(),
         "recent_events": event_log.recent(30),
+        # Model router honesty (Section 43): which domain models are
+        # actually trained/loadable, which one auto-assistance is using,
+        # and the last thing it actually said - never fabricated.
+        "model_status": state.model_status,
+        "active_domain": state.active_domain,
+        "last_auto_announcement": state.last_auto_announcement,
     })
 
 
@@ -821,9 +928,47 @@ def api_voice_status():
     })
 
 
+def auto_start():
+    """Startup sequence for voice-first, buttonless operation (Sections
+    3/29/42): the assistant starts itself - camera, voice recognition,
+    and AUTO ASSISTANCE mode - the instant the process launches. The
+    web UI that used to require clicking "Start Camera" etc. still
+    works exactly as before, but it's now a developer/debugging
+    dashboard layered on top of an assistant that's already running,
+    not a prerequisite for the assistant to do anything."""
+    log.info("=" * 60)
+    log.info("STARTUP: validating environment")
+    log.info("Model availability:")
+    for domain, status in state.model_status.items():
+        log.info("  %-14s %s", domain, status)
+    if state.active_domain:
+        log.info("Auto-assistance will use the '%s' domain model.", state.active_domain)
+    else:
+        log.warning("No domain-specific model is available yet - auto-assistance will "
+                    "stay silent on object detection until one is trained/placed under "
+                    "models/<domain>/best.pt. It will NOT silently fall back to a "
+                    "generic COCO model (see modules/model_router.py).")
+
+    camera_ok = start_camera()
+    if camera_ok:
+        log.info("Camera: OK")
+    else:
+        log.warning("Camera: unavailable - the assistant will keep running (voice "
+                    "commands, OCR-on-demand, currency, etc. still work), but automatic "
+                    "visual detection has nothing to see until a camera is connected.")
+
+    voice_listener.start()
+    state.voice_active = True
+    log.info("Voice recognition: starting")
+
+    log.info("=" * 60)
+    speaker.speak("AI assistance started.", force=True)
+
+
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     log.info("Starting AI Blind Assistant server on http://127.0.0.1:5000")
+    auto_start()
     # use_reloader=False: avoids double-loading the YOLO/EasyOCR models
     # and spawning duplicate camera threads under Flask's auto-reloader.
     app.run(host="0.0.0.0", port=5000, debug=config.DEBUG, threaded=True, use_reloader=False)
